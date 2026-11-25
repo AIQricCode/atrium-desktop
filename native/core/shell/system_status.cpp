@@ -22,6 +22,7 @@
 #include <winrt/base.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <optional>
@@ -373,6 +374,15 @@ struct HibernateWorkerJob {
     UINT noticeMsg = 0;
 };
 
+std::atomic<bool> g_hibernateInFlight{false};
+
+struct ClearHibernateInFlight {
+    ClearHibernateInFlight() = default;
+    ~ClearHibernateInFlight() { g_hibernateInFlight.store(false, std::memory_order_release); }
+    ClearHibernateInFlight(const ClearHibernateInFlight&) = delete;
+    ClearHibernateInFlight& operator=(const ClearHibernateInFlight&) = delete;
+};
+
 void EnableShutdownPrivilege()
 {
     HANDLE token = nullptr;
@@ -397,7 +407,7 @@ std::wstring SystemPowerCfgPath()
 
 void PostPowerNotice(HWND notifyHost, UINT noticeMsg, PowerAction action, PowerActionStatus status)
 {
-    if (!notifyHost || !noticeMsg)
+    if (!notifyHost || !noticeMsg || !IsWindow(notifyHost))
         return;
     if (auto notice = BuildPowerActionNotice(action, status))
         PostOwned(notifyHost, noticeMsg, 0, std::make_unique<Notice>(std::move(*notice)));
@@ -405,6 +415,7 @@ void PostPowerNotice(HWND notifyHost, UINT noticeMsg, PowerAction action, PowerA
 
 VOID CALLBACK HibernateWorkerProc(PTP_CALLBACK_INSTANCE, PVOID context)
 {
+    const ClearHibernateInFlight clearOnExit;
     const std::unique_ptr<HibernateWorkerJob> job(static_cast<HibernateWorkerJob*>(context));
     const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     DWORD err = 0;
@@ -561,16 +572,23 @@ bool RunPowerAction(PowerAction action, HWND notifyHost, UINT noticeMsg)
     if (action == PowerAction::Sleep)
         return SetSuspendState(FALSE, FALSE, FALSE) != FALSE;
     if (action == PowerAction::Hibernate) {
+        bool expected = false;
+        if (!g_hibernateInFlight.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            Log(L"power: hibernate already in progress");
+            return true;
+        }
         if (notifyHost && noticeMsg) {
             auto job = std::make_unique<HibernateWorkerJob>(HibernateWorkerJob{notifyHost, noticeMsg});
             if (TrySubmitThreadpoolCallback(HibernateWorkerProc, job.get(), nullptr)) {
                 [[maybe_unused]] HibernateWorkerJob* raw = job.release();
                 return true;
             }
+            g_hibernateInFlight.store(false, std::memory_order_release);
             Log(L"power: threadpool dispatch failed (%lu)", GetLastError());
             PostPowerNotice(notifyHost, noticeMsg, PowerAction::Hibernate, PowerActionStatus::HibernateFailed);
             return false;
         }
+        const ClearHibernateInFlight clearOnExit;
         return ExecuteHibernateAction() == PowerActionStatus::Ok;
     }
     // Shutting down needs SeShutdownPrivilege enabled in the token (every

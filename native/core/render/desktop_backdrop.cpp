@@ -185,9 +185,9 @@ void DesktopBackdrop::Update(const std::wstring& mode)
             texture_ = nullptr; // not a picture of what comes next
         mode_ = want;
         retryMs_ = 0;
-        if (mode_ == L"wallpaper")
-            StartWallpaper();
     }
+    if (mode_ == L"wallpaper" && !wallpaper_)
+        StartWallpaper();
     if (mode_ == L"desktop") {
         if (session_ && (closed_ || !IsWindow(desktop_))) {
             Log(L"render: the desktop window went away; capturing it again soon");

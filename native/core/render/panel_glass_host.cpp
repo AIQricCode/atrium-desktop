@@ -258,43 +258,39 @@ PanelGlassHost::StepResult PanelGlassHost::AcquirePanelCaptures(const std::vecto
         ID3D11Texture2D* frame = extra.source->Acquire();
         if (extra.source->Lost())
             return StepResult::Retry;
-        if (!frame && !debugCapturable_ && extra.texture && !CopyBoundsCoverPanels(extra.copyBounds, rects, extra.bounds, GlassRenderer::kPad))
-            frame = extra.source->Again();
         extra.fresh = frame && !(debugCapturable_ && extra.texture);
         if (extra.fresh) {
             D3D11_TEXTURE2D_DESC desc{}, previous{};
             frame->GetDesc(&desc);
             if (extra.texture)
                 extra.texture->GetDesc(&previous);
-            const RECT desired = ComputeSecondaryCopyBounds(rects, extra.bounds, GlassRenderer::kPad, 128);
-            const RECT target = IsRectEmpty(&desired) ? extra.bounds : desired;
-            const int64_t prevArea = int64_t(previous.Width) * previous.Height;
-            const int64_t wantArea = int64_t(target.right - target.left) * (target.bottom - target.top);
-            const bool needAlloc = !extra.texture || previous.Format != desc.Format ||
-                                   !CopyBoundsCoverPanels(extra.copyBounds, rects, extra.bounds, GlassRenderer::kPad) ||
-                                   (wantArea > 0 && wantArea * 2 < prevArea);
+            const bool needAlloc = !extra.texture || previous.Width != desc.Width || previous.Height != desc.Height || previous.Format != desc.Format;
             if (needAlloc) {
                 extra.texture = nullptr;
                 D3D11_TEXTURE2D_DESC texDesc = desc;
-                texDesc.Width = UINT(std::max<LONG>(1, target.right - target.left));
-                texDesc.Height = UINT(std::max<LONG>(1, target.bottom - target.top));
                 texDesc.MipLevels = 1;
                 texDesc.ArraySize = 1;
                 texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
                 texDesc.MiscFlags = texDesc.CPUAccessFlags = 0;
                 texDesc.Usage = D3D11_USAGE_DEFAULT;
                 winrt::check_hresult(gpu_.device->CreateTexture2D(&texDesc, nullptr, extra.texture.put()));
-                extra.copyBounds = target;
-            }
-            const UINT srcX = UINT(std::max(0L, extra.copyBounds.left - extra.bounds.left));
-            const UINT srcY = UINT(std::max(0L, extra.copyBounds.top - extra.bounds.top));
-            const UINT texW = UINT(std::max(0L, extra.copyBounds.right - extra.copyBounds.left));
-            const UINT texH = UINT(std::max(0L, extra.copyBounds.bottom - extra.copyBounds.top));
-            const UINT copyW = srcX < desc.Width ? std::min(texW, desc.Width - srcX) : 0u;
-            const UINT copyH = srcY < desc.Height ? std::min(texH, desc.Height - srcY) : 0u;
-            if (copyW > 0 && copyH > 0) {
-                const D3D11_BOX box{srcX, srcY, 0, srcX + copyW, srcY + copyH, 1};
-                gpu_.context->CopySubresourceRegion(extra.texture.get(), 0, 0, 0, 0, frame, 0, &box);
+                // Populate the full monitor once so panels opening or moving later during desktop idle never smear edges.
+                gpu_.context->CopyResource(extra.texture.get(), frame);
+                extra.copyBounds = extra.bounds;
+            } else {
+                const RECT desired = ComputeSecondaryCopyBounds(rects, extra.bounds, GlassRenderer::kPad, 128);
+                const RECT target = IsRectEmpty(&desired) ? extra.bounds : desired;
+                const UINT x = UINT(std::max(0L, target.left - extra.bounds.left));
+                const UINT y = UINT(std::max(0L, target.top - extra.bounds.top));
+                const UINT wantW = UINT(std::max(0L, target.right - target.left));
+                const UINT wantH = UINT(std::max(0L, target.bottom - target.top));
+                const UINT copyW = x < desc.Width ? std::min(wantW, desc.Width - x) : 0u;
+                const UINT copyH = y < desc.Height ? std::min(wantH, desc.Height - y) : 0u;
+                if (copyW > 0 && copyH > 0) {
+                    const D3D11_BOX box{x, y, 0, x + copyW, y + copyH, 1};
+                    gpu_.context->CopySubresourceRegion(extra.texture.get(), 0, x, y, 0, frame, 0, &box);
+                    extra.copyBounds = target;
+                }
             }
             gpu_.context->Flush(); // submit secondary copy before releasing the DXGI/WGC frame
         }
@@ -353,7 +349,7 @@ void PanelGlassHost::UpdatePanelBackdrop(PanelState& ps, const GlassPanel& p, ID
     if (const auto extra = panelCaptures_.find(MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST)); extra != panelCaptures_.end()) {
         const auto& picture = extra->second;
         if (picture.texture && (picture.fresh || moved || !r.HasBackdrop())) {
-            r.UpdateBackdrop(picture.texture.get(), p.window.left - picture.copyBounds.left, p.window.top - picture.copyBounds.top);
+            r.UpdateBackdrop(picture.texture.get(), p.window.left - picture.bounds.left, p.window.top - picture.bounds.top);
             gpuSubmitted = true;
         }
         return;
