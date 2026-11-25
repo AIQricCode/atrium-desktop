@@ -20,7 +20,7 @@ jobs:
     # Visual Studio 2022 (MSVC 14.4x), as the developers': windows-latest moved to Visual Studio 18, whose
     # standard library refuses clang-tidy 19. A newer toolchain is an upgrade of its own (LLVM 20, the baseline).
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

@@ -37,7 +37,20 @@ int main()
 
     caps.SystemS4 = TRUE;
     caps.HiberFilePresent = TRUE;
-    Check(ClassifyHibernateCapability(true, caps) == HibernateCapability::Direct, "SystemS4=TRUE, HiberFilePresent=TRUE must be Direct");
+    caps.HiberFileType = 2;
+    Check(ClassifyHibernateCapability(true, caps) == HibernateCapability::Direct, "SystemS4=TRUE, HiberFilePresent=TRUE, HiberFileType=2 must be Direct");
+
+    caps.SystemS4 = TRUE;
+    caps.HiberFilePresent = TRUE;
+    caps.HiberFileType = 1;
+    Check(ClassifyHibernateCapability(true, caps) == HibernateCapability::NeedsEnable,
+          "SystemS4=TRUE, HiberFilePresent=TRUE, HiberFileType=1 (reduced) must be NeedsEnable");
+
+    caps.SystemS4 = TRUE;
+    caps.HiberFilePresent = TRUE;
+    caps.HiberFileType = 0;
+    Check(ClassifyHibernateCapability(true, caps) == HibernateCapability::NeedsEnable,
+          "SystemS4=TRUE, HiberFilePresent=TRUE, HiberFileType=0 (none) must be NeedsEnable");
 
     const HibernateMenuOption direct = DescribeHibernateMenu(HibernateCapability::Direct);
     Check(direct.visible && !direct.needsEnable && direct.label == L"Hibernate", "Direct menu item must say Hibernate");

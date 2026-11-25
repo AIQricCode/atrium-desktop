@@ -58,4 +58,36 @@ inline bool CopyBoundsCoverPanels(RECT copyBounds, const std::vector<RECT>& pane
     return true;
 }
 
+inline constexpr double kSecondaryUncoveredFallbackMs = 150.0;
+
+struct SecondaryBackdropDecision {
+    bool covered = false;
+    bool updateBackdrop = false;
+    bool pendingFresh = false;
+    bool waitForFresh = false; // true while !hasBackdrop && !covered before fallback timeout
+};
+
+// Decides how a secondary-monitor panel consumes the cached monitor capture:
+// only updates immediately when the capture's copied bounds cover the panel,
+// otherwise keeps pendingFresh set and falls back after `fallbackTimeoutMs`
+// when no backdrop has been seeded yet so WM_GLASS_READY cannot starve.
+inline SecondaryBackdropDecision SecondaryPanelBackdropReady(bool partialCopy, RECT copyBounds, RECT panelRect, RECT monitorBounds, int padPx,
+                                                             bool hasTexture, bool fresh, bool moved, bool hasBackdrop, bool pendingFresh,
+                                                             double uncoveredElapsedMs, double fallbackTimeoutMs = kSecondaryUncoveredFallbackMs)
+{
+    const bool covered = !partialCopy || CopyBoundsCoverPanels(copyBounds, {panelRect}, monitorBounds, padPx);
+    if (covered) {
+        const bool shouldUpdate = hasTexture && (fresh || moved || !hasBackdrop || pendingFresh);
+        return {true, shouldUpdate, shouldUpdate ? false : pendingFresh, false};
+    }
+    if (!hasTexture)
+        return {false, false, true, false};
+    if (!hasBackdrop) {
+        if (uncoveredElapsedMs >= fallbackTimeoutMs)
+            return {false, true, true, false};
+        return {false, false, true, true};
+    }
+    return {false, false, true, false};
+}
+
 } // namespace atrium

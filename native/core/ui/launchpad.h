@@ -40,7 +40,7 @@ public:
     void Close(bool launched);
     bool Visible() const { return surface_.Visible(); }
     ULONGLONG LastClosed() const { return lastClosed_; }
-    void Refresh(); // the catalog changed: the apps, an icon
+    void Refresh(bool listChanged = true); // the catalog changed: the apps, an icon
     // Reads every app's icon ahead, at the size a window on `work` would show them.
     void Prewarm(RECT work);
     HWND Hwnd() const { return surface_.Hwnd(); }

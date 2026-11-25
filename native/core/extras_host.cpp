@@ -259,7 +259,7 @@ std::wstring ExtrasHost::MusicTip() const
 
 void ExtrasHost::OnCatalogChanged(bool listChanged)
 {
-    launchpad_.Refresh();
+    launchpad_.Refresh(listChanged);
     if (listChanged)
         PrewarmLaunchpad();
 }

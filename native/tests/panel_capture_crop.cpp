@@ -6,6 +6,9 @@ namespace {
 
 using atrium::ComputeSecondaryCopyBounds;
 using atrium::CopyBoundsCoverPanels;
+using atrium::kSecondaryUncoveredFallbackMs;
+using atrium::SecondaryBackdropDecision;
+using atrium::SecondaryPanelBackdropReady;
 
 bool RectEq(RECT a, RECT b) { return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom; }
 
@@ -62,6 +65,50 @@ int main()
     if (!Check(CopyBoundsCoverPanels(b1, {single, primaryOnly, emptyPanel}, mon, kPad), "off-monitor panels should be ignored"))
         return 1;
     if (!Check(!CopyBoundsCoverPanels(RECT{}, {single}, mon, kPad), "empty copy bounds must not cover visible panel"))
+        return 1;
+
+    // 6. Full-monitor copy (partialCopy=false) always covers the panel and clears pendingFresh.
+    const SecondaryBackdropDecision fullInit =
+        SecondaryPanelBackdropReady(false, mon, movedFar, mon, kPad, true, false, false, false, true, 0.0);
+    if (!Check(fullInit.covered && fullInit.updateBackdrop && !fullInit.pendingFresh && !fullInit.waitForFresh,
+               "full-monitor capture should cover panel and clear pendingFresh"))
+        return 1;
+
+    // 7. Partial copy covering the panel updates when pendingFresh is set and skips redundant updates when idle.
+    const SecondaryBackdropDecision coveredPending =
+        SecondaryPanelBackdropReady(true, b1, single, mon, kPad, true, false, false, true, true, 0.0);
+    if (!Check(coveredPending.covered && coveredPending.updateBackdrop && !coveredPending.pendingFresh && !coveredPending.waitForFresh,
+               "covered panel with pendingFresh should update and clear pendingFresh"))
+        return 1;
+    const SecondaryBackdropDecision coveredIdle =
+        SecondaryPanelBackdropReady(true, b1, single, mon, kPad, true, false, false, true, false, 0.0);
+    if (!Check(coveredIdle.covered && !coveredIdle.updateBackdrop && !coveredIdle.pendingFresh && !coveredIdle.waitForFresh,
+               "covered idle panel without pendingFresh should not update"))
+        return 1;
+
+    // 8. Uncovered partial copy with an existing backdrop refuses stale pixels and retains pendingFresh.
+    const SecondaryBackdropDecision uncoveredWithBackdrop =
+        SecondaryPanelBackdropReady(true, b1, movedFar, mon, kPad, true, false, true, true, false, 0.0);
+    if (!Check(!uncoveredWithBackdrop.covered && !uncoveredWithBackdrop.updateBackdrop && uncoveredWithBackdrop.pendingFresh &&
+                   !uncoveredWithBackdrop.waitForFresh,
+               "uncovered panel with existing backdrop must skip stale update and set pendingFresh"))
+        return 1;
+
+    // 9. Uncovered partial copy without a backdrop waits up to 150 ms, then falls back to avoid starving WM_GLASS_READY.
+    const SecondaryBackdropDecision uncoveredWait =
+        SecondaryPanelBackdropReady(true, b1, movedFar, mon, kPad, true, false, false, false, false, kSecondaryUncoveredFallbackMs - 1.0);
+    if (!Check(!uncoveredWait.covered && !uncoveredWait.updateBackdrop && uncoveredWait.pendingFresh && uncoveredWait.waitForFresh,
+               "uncovered panel without backdrop should wait before 150 ms"))
+        return 1;
+    const SecondaryBackdropDecision uncoveredFallback =
+        SecondaryPanelBackdropReady(true, b1, movedFar, mon, kPad, true, false, false, false, false, kSecondaryUncoveredFallbackMs);
+    if (!Check(!uncoveredFallback.covered && uncoveredFallback.updateBackdrop && uncoveredFallback.pendingFresh && !uncoveredFallback.waitForFresh,
+               "uncovered panel without backdrop should fall back at 150 ms while keeping pendingFresh"))
+        return 1;
+    const SecondaryBackdropDecision uncoveredNoTex =
+        SecondaryPanelBackdropReady(true, b1, movedFar, mon, kPad, false, false, false, false, false, kSecondaryUncoveredFallbackMs);
+    if (!Check(!uncoveredNoTex.covered && !uncoveredNoTex.updateBackdrop && uncoveredNoTex.pendingFresh && !uncoveredNoTex.waitForFresh,
+               "uncovered panel without texture cannot update backdrop"))
         return 1;
 
     return 0;

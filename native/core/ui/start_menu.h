@@ -46,7 +46,7 @@ public:
     void Close(bool launched);
     bool Visible() const { return surface_.Visible(); }
     ULONGLONG LastClosed() const { return lastClosed_; }
-    void Refresh(); // an icon or the catalog changed
+    void Refresh(bool listChanged = true); // an icon or the catalog changed
     void SetStatus(const SystemStatus& status);
     static int TileIconPx(float scale); // the largest icon size (AppCatalog::PrefetchStartIcons); every size draws from it
     int IconPx() const;                 // the same, in pixels on this monitor: what an icon is read at

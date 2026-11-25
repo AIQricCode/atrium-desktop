@@ -434,7 +434,8 @@ HibernateCapability ClassifyHibernateCapability(bool queryOk, const SYSTEM_POWER
         return HibernateCapability::QueryFailed;
     if (!caps.SystemS4)
         return HibernateCapability::Unsupported;
-    return caps.HiberFilePresent ? HibernateCapability::Direct : HibernateCapability::NeedsEnable;
+    constexpr BYTE kHiberFileTypeFull = 2; // HIBERFILE_TYPE_FULL (0=none, 1=reduced/fast-startup only, 2=full)
+    return (caps.HiberFilePresent && caps.HiberFileType == kHiberFileTypeFull) ? HibernateCapability::Direct : HibernateCapability::NeedsEnable;
 }
 
 HibernateCapability QueryHibernateCapability(DWORD* error)

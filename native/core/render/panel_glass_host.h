@@ -95,6 +95,8 @@ private:
         // picture, what is under it changed (readback), its parameters changed.
         int burstMoved = 0, burstDesktop = 0, burstReadback = 0, burstParams = 0;
         bool owed = false;      // a frame to draw once its last one is on screen (Ready), or at the next tick
+        bool pendingFresh = false;
+        double uncoveredSinceMs = 0.0;
         uint64_t drawnTick = 0; // the compositor frame it was last drawn in
         bool dark = false;
         InkGrid grid;         // ink region by region (published for the popup)
@@ -107,6 +109,7 @@ private:
         RECT bounds{};
         RECT copyBounds{};
         bool fresh = false;
+        bool partialCopy = false;
     };
 
     StepResult SyncPanelCaptures(const std::vector<GlassPanel>& panels, bool barKeepsOwnWindowsOut);
@@ -115,7 +118,7 @@ private:
     StepResult RenderSinglePanel(const GlassPanel& p, const Settings& settings, RECT monitorRect, float barScale, ID3D11Texture2D* source, uint64_t tick,
                                  double now, bool& moving, bool& gpuSubmitted);
     void UpdatePanelBackdrop(PanelState& ps, const GlassPanel& p, ID3D11Texture2D* source, RECT monitorRect, double now, bool moved, bool changed,
-                             bool& newDesktop, bool& gpuSubmitted);
+                             bool& newDesktop, bool& moving, bool& gpuSubmitted);
     void UpdatePanelInk(PanelState& ps, HWND hwnd, const Settings& settings, float panelScale, int w, int h, double now, bool& changed, bool& under);
     void RecordPanelPresent(PanelState& ps, const GlassPanel& p, int w, int h, double now, double t0, double created, double t1, bool moved, bool newDesktop,
                             bool under, bool same);

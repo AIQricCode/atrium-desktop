@@ -102,7 +102,15 @@ private:
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool pool_{nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureSession session_{nullptr};
     winrt::Windows::Graphics::SizeInt32 size_{};
-    std::atomic<bool> closed_{false};
+    struct ClosedState {
+        explicit ClosedState(HANDLE frameEvent);
+        ClosedState(const ClosedState&) = delete;
+        ClosedState& operator=(const ClosedState&) = delete;
+        ~ClosedState();
+        std::atomic<bool> closed{false};
+        HANDLE wake = nullptr;
+    };
+    std::shared_ptr<ClosedState> closedState_;
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem::Closed_revoker closedRevoker_;
 
     // The wallpaper, composed by the worker (BGRA, premultiplied, opaque).

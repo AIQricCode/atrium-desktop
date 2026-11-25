@@ -8,6 +8,7 @@
 #include "motion.h"
 #include "render/wifi_glyph.h"
 #include "shell/shell_icon.h"
+#include "ui/start_menu_sort.h"
 
 #include <imm.h>
 #include <sddl.h>
@@ -81,13 +82,6 @@ float Mix(float a, float b, float t) { return a + (b - a) * t; }
 D2D1_RECT_F Mix(const D2D1_RECT_F& a, const D2D1_RECT_F& b, float t)
 {
     return D2D1::RectF(Mix(a.left, b.left, t), Mix(a.top, b.top, t), Mix(a.right, b.right, t), Mix(a.bottom, b.bottom, t));
-}
-constexpr wchar_t kHiddenHead = 1; // the heading of the hidden apps, after Z
-int LetterRank(wchar_t letter) { return letter == L'#' ? 0 : letter >= L'A' && letter <= L'Z' ? letter - L'A' + 1 : 27; }
-bool CompareAppNames(const std::wstring& a, const std::wstring& b)
-{
-    return CompareStringEx(LOCALE_NAME_USER_DEFAULT, NORM_IGNORECASE | SORT_DIGITSASNUMBERS, a.c_str(), int(a.size()), b.c_str(), int(b.size()), nullptr,
-                           nullptr, 0) == CSTR_LESS_THAN;
 }
 
 // An app taken out of the arrangement: a tile of its own or one of a folder's
@@ -493,29 +487,31 @@ void StartMenu::SetStatus(const SystemStatus& status)
     }
 }
 
-void StartMenu::Refresh()
+void StartMenu::Refresh(bool listChanged)
 {
     if (!surface_.Visible())
         return;
     // Icons arrive one by one and the apps' windows change all the time: the
     // tiles are rebuilt only when the apps themselves changed.
-    auto apps = catalog_.Apps();
-    auto pins = catalog_.StartPins();
-    auto pinGroups = catalog_.StartPinGroups();
-    auto same = [](const std::vector<CatalogApp>& a, const std::vector<CatalogApp>& b) {
-        return a.size() == b.size() &&
-               std::equal(a.begin(), a.end(), b.begin(), [](const CatalogApp& x, const CatalogApp& y) { return x.id == y.id && x.name == y.name; });
-    };
-    if (!same(apps, apps_) || !same(pins, pins_) || pinGroups.size() != pinGroups_.size() ||
-        !std::equal(pinGroups.begin(), pinGroups.end(), pinGroups_.begin(),
-                    [&](const CatalogFolder& x, const CatalogFolder& y) { return x.name == y.name && x.folder == y.folder && same(x.apps, y.apps); })) {
-        if (drag_.on) {
-            stale_ = true; // the carried tile's indices stay valid until it is put down
-        } else {
-            apps_ = std::move(apps);
-            pins_ = std::move(pins);
-            pinGroups_ = std::move(pinGroups);
-            Rebuild();
+    if (listChanged) {
+        auto apps = catalog_.Apps();
+        auto pins = catalog_.StartPins();
+        auto pinGroups = catalog_.StartPinGroups();
+        auto same = [](const std::vector<CatalogApp>& a, const std::vector<CatalogApp>& b) {
+            return a.size() == b.size() &&
+                   std::equal(a.begin(), a.end(), b.begin(), [](const CatalogApp& x, const CatalogApp& y) { return x.id == y.id && x.name == y.name; });
+        };
+        if (!same(apps, apps_) || !same(pins, pins_) || pinGroups.size() != pinGroups_.size() ||
+            !std::equal(pinGroups.begin(), pinGroups.end(), pinGroups_.begin(),
+                        [&](const CatalogFolder& x, const CatalogFolder& y) { return x.name == y.name && x.folder == y.folder && same(x.apps, y.apps); })) {
+            if (drag_.on) {
+                stale_ = true; // the carried tile's indices stay valid until it is put down
+            } else {
+                apps_ = std::move(apps);
+                pins_ = std::move(pins);
+                pinGroups_ = std::move(pinGroups);
+                Rebuild();
+            }
         }
     }
     if (pendingSync_.on && !drag_.on) {
@@ -686,45 +682,7 @@ std::vector<StartMenu::Row> StartMenu::Results() const
 
 std::vector<StartMenu::Row> StartMenu::AllApps() const
 {
-    // Every app and folder under its letter (# first, as in Windows), by name within it.
-    struct Entry {
-        wchar_t letter;
-        Row row;
-    };
-    std::vector<Entry> entries;
-    for (size_t i = 0; i < tiles_.size(); ++i)
-        if (tiles_[i].folder)
-            entries.push_back({IndexLetter(tiles_[i].name), {0, int(i), {}}});
-    std::vector<CatalogApp> hidden;
-    for (const CatalogApp& a : apps_) {
-        if (Hidden(a.id))
-            hidden.push_back(a);
-        else
-            entries.push_back({IndexLetter(a.name), {0, -1, a}});
-    }
-    auto nameOf = [&](const Entry& e) -> const std::wstring& { return e.row.folder >= 0 ? tiles_[size_t(e.row.folder)].name : e.row.app.name; };
-    std::ranges::stable_sort(entries, [&](const Entry& a, const Entry& b) {
-        if (a.letter != b.letter)
-            return LetterRank(a.letter) < LetterRank(b.letter);
-        return CompareAppNames(nameOf(a), nameOf(b));
-    });
-    std::vector<Row> out;
-    wchar_t letter = 0;
-    for (Entry& e : entries) {
-        if (e.letter != letter) {
-            letter = e.letter;
-            out.push_back({letter, -1, {}});
-        }
-        out.push_back(std::move(e.row));
-    }
-    // The hidden apps last, under a heading of their own.
-    if (!hidden.empty()) {
-        std::ranges::stable_sort(hidden, [](const CatalogApp& a, const CatalogApp& b) { return CompareAppNames(a.name, b.name); });
-        out.push_back({kHiddenHead, -1, {}});
-        for (CatalogApp& a : hidden)
-            out.push_back({0, -1, std::move(a)});
-    }
-    return out;
+    return BuildStartMenuAllAppsRows<Row>(tiles_, apps_, [this](const std::wstring& id) { return Hidden(id); });
 }
 
 // The largest size's icons, for the read-ahead before the menu knows its own
@@ -792,7 +750,7 @@ void StartMenu::ShowHidden()
     sel_ = -1;
     float top = 0;
     for (const Row& row : list_) {
-        if (row.letter == kHiddenHead)
+        if (row.letter == kStartMenuHiddenHead)
             break;
         top += row.letter ? kHeadH : kRowH;
     }
@@ -1245,7 +1203,7 @@ void StartMenu::PaintRows(Canvas& c, const Theme& t, const std::vector<Row>& row
         c.BeginGroup(e * visible, 1, (r.left + r.right) / 2, (r.top + r.bottom) / 2, 0, 8 * (1 - e));
         if (row.letter) {
             // A letter's heading (or the hidden apps').
-            const std::wstring label = row.letter == kHiddenHead ? Tr(L"Hidden") : std::wstring(1, row.letter);
+            const std::wstring label = row.letter == kStartMenuHiddenHead ? Tr(L"Hidden") : std::wstring(1, row.letter);
             const float tw = std::max(c.TextWidth(label, 13, DWRITE_FONT_WEIGHT_SEMI_BOLD), 10.f);
             D2D1_RECT_F chip = D2D1::RectF(r.left + 6, r.top + 6, r.left + 6 + tw + 20, r.bottom - 4);
             c.Fill(chip, (chip.bottom - chip.top) / 2, Alpha(t.hover, 0.35f));
@@ -1377,8 +1335,8 @@ void StartMenu::ScrubTo(float y)
     float top = 0, at = -1;
     wchar_t found = 0;
     for (const Row& row : list_) {
-        if (row.letter && row.letter != kHiddenHead) {
-            if (LetterRank(row.letter) >= LetterRank(kLetters[i]) && !found) {
+        if (row.letter && row.letter != kStartMenuHiddenHead) {
+            if (StartMenuLetterRank(row.letter) >= StartMenuLetterRank(kLetters[i]) && !found) {
                 found = row.letter;
                 at = top;
             }

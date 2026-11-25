@@ -190,24 +190,26 @@ void Launchpad::Finish()
     }
 }
 
-void Launchpad::Refresh()
+void Launchpad::Refresh(bool listChanged)
 {
     if (!surface_.Visible() || closing_)
         return;
-    if (lifted_ >= 0) {
-        stale_ = true;
-        return;
-    }
-    auto apps = LaunchableApps();
-    const bool changed = apps.size() != apps_.size() || !std::equal(apps.begin(), apps.end(), apps_.begin(),
-                                                                    [](const CatalogApp& a, const CatalogApp& b) { return a.id == b.id && a.name == b.name; });
-    if (changed) {
-        apps_ = std::move(apps);
-        Split();
-        if (!query_.empty())
-            Filter();
-        page_ = std::min(page_, Pages() - 1);
-        UpdatePageTargets(true);
+    if (listChanged) {
+        if (lifted_ >= 0) {
+            stale_ = true;
+            return;
+        }
+        auto apps = LaunchableApps();
+        const bool changed = apps.size() != apps_.size() || !std::equal(apps.begin(), apps.end(), apps_.begin(),
+                                                                        [](const CatalogApp& a, const CatalogApp& b) { return a.id == b.id && a.name == b.name; });
+        if (changed) {
+            apps_ = std::move(apps);
+            Split();
+            if (!query_.empty())
+                Filter();
+            page_ = std::min(page_, Pages() - 1);
+            UpdatePageTargets(true);
+        }
     }
     surface_.Invalidate();
 }

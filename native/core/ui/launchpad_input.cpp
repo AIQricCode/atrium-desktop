@@ -74,8 +74,7 @@ bool Launchpad::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
             DropLifted();
             down_ = dragging_ = false;
             pressed_ = -1;
-            page_ = std::clamp(int(std::lround(pageShown_)), 0, Pages() - 1);
-            surface_.Invalidate();
+            SetPage(int(std::lround(pageShown_)));
         }
         return true;
     case WM_RBUTTONUP: AppMenu(pt); return true;
@@ -258,9 +257,8 @@ void Launchpad::Release(POINT pt)
         dragging_ = false;
         const float moved = float(pt.x - downPt_.x) / surface_.Scale() / w_;
         const int basePage = std::clamp(int(std::lround(dragFrom_)), 0, Pages() - 1);
-        page_ = SettlePageDrag(basePage, Pages(), moved, ClockMs() - dragMs_ > 120 ? 0.f : dragSpeed_);
+        SetPage(SettlePageDrag(basePage, Pages(), moved, ClockMs() - dragMs_ > 120 ? 0.f : dragSpeed_));
         pageSpeed_ = -dragSpeed_; // the glide goes on from the drag's pace
-        surface_.Invalidate();
         return;
     }
     const int at = HitAt(pt);

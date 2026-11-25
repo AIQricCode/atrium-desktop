@@ -1071,8 +1071,11 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         return 0;
     case WM_CATALOG:
-        if (g_app.start)
-            g_app.start->Refresh(), g_app.extras->OnCatalogChanged(w == 0);
+        if (g_app.start && g_app.extras) {
+            const bool listChanged = (w == 0);
+            g_app.start->Refresh(listChanged);
+            g_app.extras->OnCatalogChanged(listChanged);
+        }
         return 0;
     case WM_VOLUME: UpdateStatus(); return 0;
     case WM_STATUS: {

@@ -19,6 +19,33 @@ namespace {
 // (the bar's too) was held up to 50 ms.
 constexpr double kDesktopSettleMs = 250;
 
+RECT PanelCaptureRect(const GlassPanel& p)
+{
+    const int w = std::max(int(p.window.right - p.window.left), p.bufferW);
+    const int h = std::max(int(p.window.bottom - p.window.top), p.bufferH);
+    return RECT{p.window.left, p.window.top, p.window.left + w, p.window.top + h};
+}
+
+bool CopySecondaryRegion(const Gpu& gpu, ID3D11Texture2D* src, ID3D11Texture2D* dst, RECT monitorBounds, RECT target)
+{
+    D3D11_TEXTURE2D_DESC desc{}, dstDesc{};
+    src->GetDesc(&desc);
+    dst->GetDesc(&dstDesc);
+    const UINT x = UINT(std::max(0L, target.left - monitorBounds.left));
+    const UINT y = UINT(std::max(0L, target.top - monitorBounds.top));
+    const UINT wantW = UINT(std::max(0L, target.right - target.left));
+    const UINT wantH = UINT(std::max(0L, target.bottom - target.top));
+    const UINT maxW = std::min(desc.Width, dstDesc.Width);
+    const UINT maxH = std::min(desc.Height, dstDesc.Height);
+    const UINT copyW = x < maxW ? std::min(wantW, maxW - x) : 0u;
+    const UINT copyH = y < maxH ? std::min(wantH, maxH - y) : 0u;
+    if (copyW == 0 || copyH == 0)
+        return false;
+    const D3D11_BOX box{x, y, 0, x + copyW, y + copyH, 1};
+    gpu.context->CopySubresourceRegion(dst, 0, x, y, 0, src, 0, &box);
+    return true;
+}
+
 void UpdatePanelInkGrid(const Readback& rb, const Settings& settings, float panelScale, int w, int h, InkGrid& current, bool& dark, bool& inkOwed)
 {
     const float padX = float(rb.origin.x), padY = float(rb.origin.y);
@@ -249,12 +276,11 @@ PanelGlassHost::StepResult PanelGlassHost::AcquirePanelCaptures(const std::vecto
     for (auto& [monitor, extra] : panelCaptures_) {
         std::vector<RECT> rects;
         for (const GlassPanel& p : panels) {
-            if (!p.desktop && p.visible && MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST) == monitor) {
-                const int w = std::max(int(p.window.right - p.window.left), p.bufferW);
-                const int h = std::max(int(p.window.bottom - p.window.top), p.bufferH);
-                rects.push_back(RECT{p.window.left, p.window.top, p.window.left + w, p.window.top + h});
-            }
+            if (!p.desktop && p.visible && MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST) == monitor)
+                rects.push_back(PanelCaptureRect(p));
         }
+        const RECT desired = ComputeSecondaryCopyBounds(rects, extra.bounds, GlassRenderer::kPad, 128);
+        const RECT target = IsRectEmpty(&desired) ? extra.bounds : desired;
         ID3D11Texture2D* frame = extra.source->Acquire();
         if (extra.source->Lost())
             return StepResult::Retry;
@@ -277,22 +303,21 @@ PanelGlassHost::StepResult PanelGlassHost::AcquirePanelCaptures(const std::vecto
                 // Populate the full monitor once so panels opening or moving later during desktop idle never smear edges.
                 gpu_.context->CopyResource(extra.texture.get(), frame);
                 extra.copyBounds = extra.bounds;
-            } else {
-                const RECT desired = ComputeSecondaryCopyBounds(rects, extra.bounds, GlassRenderer::kPad, 128);
-                const RECT target = IsRectEmpty(&desired) ? extra.bounds : desired;
-                const UINT x = UINT(std::max(0L, target.left - extra.bounds.left));
-                const UINT y = UINT(std::max(0L, target.top - extra.bounds.top));
-                const UINT wantW = UINT(std::max(0L, target.right - target.left));
-                const UINT wantH = UINT(std::max(0L, target.bottom - target.top));
-                const UINT copyW = x < desc.Width ? std::min(wantW, desc.Width - x) : 0u;
-                const UINT copyH = y < desc.Height ? std::min(wantH, desc.Height - y) : 0u;
-                if (copyW > 0 && copyH > 0) {
-                    const D3D11_BOX box{x, y, 0, x + copyW, y + copyH, 1};
-                    gpu_.context->CopySubresourceRegion(extra.texture.get(), 0, x, y, 0, frame, 0, &box);
-                    extra.copyBounds = target;
-                }
+                extra.partialCopy = false;
+            } else if (CopySecondaryRegion(gpu_, frame, extra.texture.get(), extra.bounds, target)) {
+                extra.copyBounds = target;
+                extra.partialCopy = !EqualRect(&target, &extra.bounds);
             }
             gpu_.context->Flush(); // submit secondary copy before releasing the DXGI/WGC frame
+        } else if (!frame && extra.texture && extra.partialCopy && !CopyBoundsCoverPanels(extra.copyBounds, rects, extra.bounds, GlassRenderer::kPad)) {
+            if (ID3D11Texture2D* cached = extra.source->Again()) {
+                if (CopySecondaryRegion(gpu_, cached, extra.texture.get(), extra.bounds, target)) {
+                    gpu_.context->Flush();
+                    extra.copyBounds = target;
+                    extra.partialCopy = !EqualRect(&target, &extra.bounds);
+                    extra.fresh = true;
+                }
+            }
         }
         extra.source->Release();
     }
@@ -318,7 +343,7 @@ void PanelGlassHost::FlushIdleBursts(double now)
 }
 
 void PanelGlassHost::UpdatePanelBackdrop(PanelState& ps, const GlassPanel& p, ID3D11Texture2D* source, RECT monitorRect, double now, bool moved, bool changed,
-                                         bool& newDesktop, bool& gpuSubmitted)
+                                         bool& newDesktop, bool& moving, bool& gpuSubmitted)
 {
     GlassRenderer& r = *ps.renderer;
     if (p.desktop) {
@@ -348,7 +373,19 @@ void PanelGlassHost::UpdatePanelBackdrop(PanelState& ps, const GlassPanel& p, ID
     }
     if (const auto extra = panelCaptures_.find(MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST)); extra != panelCaptures_.end()) {
         const auto& picture = extra->second;
-        if (picture.texture && (picture.fresh || moved || !r.HasBackdrop())) {
+        const double elapsed = ps.uncoveredSinceMs > 0.0 ? now - ps.uncoveredSinceMs : 0.0;
+        const SecondaryBackdropDecision decision =
+            SecondaryPanelBackdropReady(picture.partialCopy, picture.copyBounds, PanelCaptureRect(p), picture.bounds, GlassRenderer::kPad,
+                                        picture.texture != nullptr, picture.fresh, moved, r.HasBackdrop(), ps.pendingFresh, elapsed);
+        ps.pendingFresh = decision.pendingFresh;
+        if (decision.waitForFresh) {
+            if (ps.uncoveredSinceMs == 0.0)
+                ps.uncoveredSinceMs = now;
+            moving = true;
+        } else {
+            ps.uncoveredSinceMs = 0.0;
+        }
+        if (decision.updateBackdrop) {
             r.UpdateBackdrop(picture.texture.get(), p.window.left - picture.bounds.left, p.window.top - picture.bounds.top);
             gpuSubmitted = true;
         }
@@ -449,7 +486,7 @@ PanelGlassHost::StepResult PanelGlassHost::RenderSinglePanel(const GlassPanel& p
     if (moved && !p.desktop && MonitorFromRect(&p.window, MONITOR_DEFAULTTONEAREST) == captureMonitor_)
         panelMovedMs_ = now;
     r.Resize(bufferW, bufferH);
-    UpdatePanelBackdrop(ps, p, source, monitorRect, now, moved, changed, newDesktop, gpuSubmitted);
+    UpdatePanelBackdrop(ps, p, source, monitorRect, now, moved, changed, newDesktop, moving, gpuSubmitted);
     PanelParams(settings, panelScale, p, gp_);
     UpdatePanelInk(ps, p.hwnd, settings, panelScale, w, h, now, changed, under);
     if (p.pop != ps.pop) {

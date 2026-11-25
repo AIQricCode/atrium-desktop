@@ -1,5 +1,4 @@
-#include "shell/app_catalog.h"
-#include "shell/start_layout.h"
+#include "ui/start_menu_sort.h"
 
 #include <algorithm>
 #include <iostream>
@@ -12,7 +11,6 @@ using namespace atrium;
 
 namespace {
 
-constexpr wchar_t kHiddenHead = 1;
 int g_failures = 0;
 
 void Require(bool condition, const char* message)
@@ -21,14 +19,6 @@ void Require(bool condition, const char* message)
         std::cerr << "FAIL: " << message << '\n';
         ++g_failures;
     }
-}
-
-int LetterRank(wchar_t letter) { return letter == L'#' ? 0 : letter >= L'A' && letter <= L'Z' ? letter - L'A' + 1 : 27; }
-
-bool CompareAppNames(const std::wstring& a, const std::wstring& b)
-{
-    return CompareStringEx(LOCALE_NAME_USER_DEFAULT, NORM_IGNORECASE | SORT_DIGITSASNUMBERS, a.c_str(), int(a.size()), b.c_str(), int(b.size()), nullptr,
-                           nullptr, 0) == CSTR_LESS_THAN;
 }
 
 struct TestTile {
@@ -42,52 +32,10 @@ struct TestRow {
     CatalogApp app;
 };
 
-std::vector<TestRow> BuildAllApps(const std::vector<TestTile>& tiles, const std::vector<CatalogApp>& apps, const std::vector<std::wstring>& hiddenIds)
-{
-    struct Entry {
-        wchar_t letter;
-        TestRow row;
-    };
-    auto isHidden = [&](const std::wstring& id) { return std::ranges::find(hiddenIds, id) != hiddenIds.end(); };
-    std::vector<Entry> entries;
-    for (size_t i = 0; i < tiles.size(); ++i)
-        if (tiles[i].folder)
-            entries.push_back({IndexLetter(tiles[i].name), {0, int(i), {}}});
-    std::vector<CatalogApp> hidden;
-    for (const CatalogApp& a : apps) {
-        if (isHidden(a.id))
-            hidden.push_back(a);
-        else
-            entries.push_back({IndexLetter(a.name), {0, -1, a}});
-    }
-    auto nameOf = [&](const Entry& e) -> const std::wstring& { return e.row.folder >= 0 ? tiles[size_t(e.row.folder)].name : e.row.app.name; };
-    std::ranges::stable_sort(entries, [&](const Entry& a, const Entry& b) {
-        if (a.letter != b.letter)
-            return LetterRank(a.letter) < LetterRank(b.letter);
-        return CompareAppNames(nameOf(a), nameOf(b));
-    });
-    std::vector<TestRow> out;
-    wchar_t letter = 0;
-    for (Entry& e : entries) {
-        if (e.letter != letter) {
-            letter = e.letter;
-            out.push_back({letter, -1, {}});
-        }
-        out.push_back(std::move(e.row));
-    }
-    if (!hidden.empty()) {
-        std::ranges::stable_sort(hidden, [](const CatalogApp& a, const CatalogApp& b) { return CompareAppNames(a.name, b.name); });
-        out.push_back({kHiddenHead, -1, {}});
-        for (CatalogApp& a : hidden)
-            out.push_back({0, -1, std::move(a)});
-    }
-    return out;
-}
-
 std::wstring RowName(const std::vector<TestTile>& tiles, const TestRow& row)
 {
     if (row.letter)
-        return row.letter == kHiddenHead ? L"[HIDDEN]" : std::wstring(1, row.letter);
+        return row.letter == kStartMenuHiddenHead ? L"[HIDDEN]" : std::wstring(1, row.letter);
     return row.folder >= 0 ? tiles[size_t(row.folder)].name : row.app.name;
 }
 
@@ -138,7 +86,8 @@ void CheckLargeMixedSort()
     }
 
     const std::vector<std::wstring> hiddenIds = {L"hid10", L"hid2"};
-    const std::vector<TestRow> rows = BuildAllApps(tiles, apps, hiddenIds);
+    const std::vector<TestRow> rows =
+        BuildStartMenuAllAppsRows<TestRow>(tiles, apps, [&](const std::wstring& id) { return std::ranges::find(hiddenIds, id) != hiddenIds.end(); });
 
     // Collect every non-heading entry in order and verify strict non-decreasing sort invariant.
     std::vector<std::pair<wchar_t, std::wstring>> sortedItems;
@@ -147,13 +96,13 @@ void CheckLargeMixedSort()
     wchar_t prevHeading = 0;
     for (const TestRow& row : rows) {
         if (row.letter) {
-            if (row.letter == kHiddenHead) {
+            if (row.letter == kStartMenuHiddenHead) {
                 inHidden = true;
                 continue;
             }
             Require(!inHidden, "no letter headings appear after hidden heading");
             if (prevHeading)
-                Require(LetterRank(prevHeading) < LetterRank(row.letter), "letter headings are strictly ordered (# then A..Z)");
+                Require(StartMenuLetterRank(prevHeading) < StartMenuLetterRank(row.letter), "letter headings are strictly ordered (# then A..Z)");
             prevHeading = row.letter;
             continue;
         }
@@ -171,9 +120,9 @@ void CheckLargeMixedSort()
         const auto& [prevLetter, prevName] = sortedItems[i - 1];
         const auto& [curLetter, curName] = sortedItems[i];
         if (prevLetter != curLetter) {
-            Require(LetterRank(prevLetter) < LetterRank(curLetter), "letters strictly increase across groups");
+            Require(StartMenuLetterRank(prevLetter) < StartMenuLetterRank(curLetter), "letters strictly increase across groups");
         } else {
-            Require(!CompareAppNames(curName, prevName), "within-letter entries are non-decreasing under CompareAppNames");
+            Require(!CompareStartMenuAppNames(curName, prevName), "within-letter entries are non-decreasing under CompareStartMenuAppNames");
         }
     }
 

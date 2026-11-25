@@ -238,7 +238,7 @@ void DesktopBackdrop::Update(const std::wstring& mode)
         StartWallpaper();
     if (mode_ == L"desktop") {
         CheckCaptureTarget();
-        if (session_ && (closed_ || !IsWindow(desktop_))) {
+        if (session_ && ((closedState_ && closedState_->closed.load(std::memory_order_acquire)) || !IsWindow(desktop_))) {
             Log(L"render: the desktop window went away; capturing it again soon");
             StopCapture();
             retryMs_ = ClockMs() + kRetryMs;
@@ -302,6 +302,18 @@ bool DesktopBackdrop::ChangedSince(unsigned version, const RECT& area) const
         if (c.version > version && IntersectRect(&overlap, &c.rect, &area))
             return true;
     return false;
+}
+
+DesktopBackdrop::ClosedState::ClosedState(HANDLE frameEvent)
+{
+    if (frameEvent)
+        DuplicateHandle(GetCurrentProcess(), frameEvent, GetCurrentProcess(), &wake, 0, FALSE, DUPLICATE_SAME_ACCESS);
+}
+
+DesktopBackdrop::ClosedState::~ClosedState()
+{
+    if (wake)
+        CloseHandle(wake);
 }
 
 DesktopBackdrop::Starting::Starting(HANDLE frameEvent)
@@ -419,12 +431,12 @@ bool DesktopBackdrop::StartCapture()
     pool_ = std::move(start->pool);
     session_ = std::move(start->session);
     size_ = start->size;
-    closed_ = false;
     targetCheckMs_ = ClockMs() + kTargetCheckMs;
-    HANDLE ev = frameEvent_;
-    closedRevoker_ = item_.Closed(winrt::auto_revoke, [this, ev](auto&&, auto&&) {
-        closed_ = true;
-        SetEvent(ev);
+    closedState_ = std::make_shared<ClosedState>(frameEvent_);
+    closedRevoker_ = item_.Closed(winrt::auto_revoke, [state = closedState_](auto&&, auto&&) {
+        state->closed.store(true, std::memory_order_release);
+        if (state->wake)
+            SetEvent(state->wake);
     });
     Log(L"render: widgets' backdrop: %s, %dx%d", start->isProgman ? L"Progman" : L"WorkerW", size_.Width, size_.Height);
     return true;
@@ -446,6 +458,7 @@ void DesktopBackdrop::StopCapture()
     starting_.reset();
     desktop_ = nullptr;
     closedRevoker_.revoke();
+    closedState_.reset();
     if (session_)
         session_.Close();
     if (pool_)
@@ -453,7 +466,6 @@ void DesktopBackdrop::StopCapture()
     session_ = nullptr;
     pool_ = nullptr;
     item_ = nullptr;
-    closed_ = false;
 }
 
 void DesktopBackdrop::Store(ID3D11Texture2D* frame)
