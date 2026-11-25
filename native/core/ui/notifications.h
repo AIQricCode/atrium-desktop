@@ -92,7 +92,12 @@ private:
         int front = 0;         // the card in front (its text shows)
     };
 
+    struct PaintFrame;
     void Paint(Mode mode, Canvas& c);
+    void StepCards(View& v, Canvas& c, const std::vector<const Notice*>& shown, PaintFrame& f);
+    void StepSingleCard(View& v, Canvas& c, size_t i, const Notice& n, PaintFrame& f);
+    void PaintCardLayer(View& v, Canvas& c, const std::vector<const Notice*>& shown, PaintFrame& f);
+    void PaintControlsPill(Mode mode, View& v, Canvas& c, size_t shownCount, PaintFrame& f);
     void PaintCard(Canvas& c, const Notice& n, D2D1_RECT_F r, int index, View& v, bool full, float alpha, bool hideBody);
     float Ease(View& v, Canvas& c, const std::wstring& id, bool on, float dt);
     void PushStack(View& v, size_t n, int wheelDelta); // the wheel over a stack
@@ -107,6 +112,9 @@ private:
     void Remove(uint64_t id);
     void Changed();       // unread count, layout of visible windows
     void Layout(Mode mode);
+    void LayoutCorner(Mode mode, View& v, size_t shownCount);
+    void LayoutAnchored(Mode mode, View& v, size_t shownCount);
+    void CommitSurfaceRect(Mode mode, View& v, RECT r, float scale, POINT origin, bool animateShow, bool handoff);
     float CardHeight() const;
     float CardRadius() const; // the bar's, as far as the card's height allows
     std::vector<const Notice*> Shown(Mode mode) const;

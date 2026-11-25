@@ -1213,30 +1213,12 @@ void ControlCenter::OnWifiList()
         surface_.Invalidate();
     }
 }
-bool ControlCenter::Message(UINT m, WPARAM w, LPARAM l, LRESULT& /*result*/)
+bool ControlCenter::HandleWorkerMessage(UINT m, WPARAM w)
 {
-    POINT pt{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
     switch (m) {
-    case WM_ACTIVATE:
-        if (LOWORD(w) == WA_INACTIVE && surface_.Visible())
-            Close();
-        return false;
-    case WM_TIMER:
-        if (w == kStatusTimer) {
-            if (onChanged)
-                onChanged();
-            ReadRadios(page_ == Page::Bluetooth);
-            if (page_ == Page::Sound && dragging_.empty())
-                ReadAudio(false);
-            if (page_ == Page::Cast)
-                ReadMode();
-            return true;
-        }
-        return OnAsync(m, w, l);
     case WM_CC_MODULES: TakeModules(); return true;
     case WM_CC_RADIO_SET:
-        radioWriteBusy_ = false;
-        wifiWriteDone_ |= w != 0;
+        radioWriteBusy_ = false, wifiWriteDone_ |= w != 0;
         if (wifiIntent_ || bluetoothIntent_)
             WriteRadios();
         else if (surface_.Visible())
@@ -1257,11 +1239,7 @@ bool ControlCenter::Message(UINT m, WPARAM w, LPARAM l, LRESULT& /*result*/)
         return true;
     case WM_CC_RADIOS: OnRadiosResult(); return true;
     case WM_CC_AUDIO: OnAudioResult(); return true;
-    case WM_CC_DISPLAYS: {
-        displays_ = finder_.Displays();
-        surface_.Invalidate();
-        return true;
-    }
+    case WM_CC_DISPLAYS: displays_ = finder_.Displays(), surface_.Invalidate(); return true;
     case WM_CC_PROJECTED: OnProjected(); return true;
     case WM_CC_BRIGHT:
         brightBusy_ = false;
@@ -1271,95 +1249,113 @@ bool ControlCenter::Message(UINT m, WPARAM w, LPARAM l, LRESULT& /*result*/)
             brightPending_ = -1;
         return true;
     case WM_WIFI_LIST: OnWifiList(); return true;
-    case WM_MOUSEMOVE: {
-        if (!tracking_) {
-            TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, surface_.Hwnd(), 0};
-            tracking_ = TrackMouseEvent(&tme) != FALSE;
-        }
-        if (dragging_.empty() && pressed_ == L"mute" && status_.audio && (w & MK_LBUTTON) && std::abs(pt.x - downX_) > int(4 * surface_.Scale()))
-            // The symbol is part of the slider: a press there that moves drags it.
-            pressed_ = dragging_ = L"slider";
-        if (!dragging_.empty() && (w & MK_LBUTTON)) {
-            SetSliderAt(dragging_, float(pt.x) / surface_.Scale());
-            return true;
-        }
-        if (!(w & MK_LBUTTON) && ReleasePointer())
-            surface_.Invalidate();
-        std::wstring h = HitAt(pt);
-        if (h != hover_) {
-            hover_ = h;
-            surface_.Invalidate();
-        }
+    default: return false;
+    }
+}
+
+bool ControlCenter::HandleMouseMove(WPARAM w, POINT pt)
+{
+    if (!tracking_) {
+        TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, surface_.Hwnd(), 0};
+        tracking_ = TrackMouseEvent(&tme) != FALSE;
+    }
+    if (dragging_.empty() && pressed_ == L"mute" && status_.audio && (w & MK_LBUTTON) && std::abs(pt.x - downX_) > int(4 * surface_.Scale()))
+        pressed_ = dragging_ = L"slider";
+    if (!dragging_.empty() && (w & MK_LBUTTON)) {
+        SetSliderAt(dragging_, float(pt.x) / surface_.Scale());
         return true;
     }
+    if (!(w & MK_LBUTTON) && ReleasePointer())
+        surface_.Invalidate();
+    if (std::wstring h = HitAt(pt); h != hover_)
+        hover_ = std::move(h), surface_.Invalidate();
+    return true;
+}
+
+bool ControlCenter::HandleLeftDown(POINT pt)
+{
+    if (const float y = float(pt.y) / surface_.Scale(); y < cardTop_ || y >= cardTop_ + shownH_)
+        return Close(), true;
+    pressed_ = HitAt(pt);
+    if ((pressed_ == L"slider" && status_.audio) || (pressed_ == L"bright" && CanSetBrightness()) || pressed_.starts_with(L"app:"))
+        dragging_ = pressed_, SetCapture(surface_.Hwnd()), SetSliderAt(dragging_, float(pt.x) / surface_.Scale());
+    else if (pressed_ == L"mute")
+        downX_ = pt.x, SetCapture(surface_.Hwnd());
+    else if (!pressed_.empty())
+        surface_.Ripple(float(pt.x) / surface_.Scale(), float(pt.y) / surface_.Scale());
+    surface_.Invalidate();
+    return true;
+}
+
+bool ControlCenter::HandleLeftUp(POINT pt)
+{
+    const bool volume = dragging_ == L"slider", same = dragging_.empty() && !pressed_.empty() && HitAt(pt) == pressed_;
+    const std::wstring h = pressed_;
+    ReleasePointer();
+    surface_.Invalidate();
+    if (volume && onChanged)
+        onChanged();
+    else if (same)
+        Activate(h);
+    return true;
+}
+
+bool ControlCenter::HandleMouseWheel(WPARAM w, POINT pt)
+{
+    const int notches = GET_WHEEL_DELTA_WPARAM(w) / WHEEL_DELTA;
+    if (!notches || page_ != Page::Main)
+        return true;
+    const std::wstring hit = HitAt(surface_.ScreenToContent(pt));
+    if (hit == L"bright" && brightness_ >= 0) {
+        if (const int v = std::clamp(brightness_ + 2 * notches, 0, 100); v != brightness_)
+            SetBrightnessAsync(v), surface_.Invalidate();
+    } else if (status_.audio && (hit == L"slider" || hit == L"mute" || hit == L"sound-page") &&
+               SetVolumeIf(std::clamp(status_.volume + 2 * notches, 0, 100), notches > 0)) {
+        surface_.Invalidate();
+        if (onChanged)
+            onChanged();
+    }
+    return true;
+}
+
+bool ControlCenter::Message(UINT m, WPARAM w, LPARAM l, LRESULT& /*result*/)
+{
+    if (HandleWorkerMessage(m, w))
+        return true;
+    const POINT pt{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+    switch (m) {
+    case WM_ACTIVATE:
+        if (LOWORD(w) == WA_INACTIVE && surface_.Visible())
+            Close();
+        return false;
+    case WM_TIMER:
+        if (w != kStatusTimer)
+            return OnAsync(m, w, l);
+        if (onChanged)
+            onChanged();
+        ReadRadios(page_ == Page::Bluetooth);
+        if (page_ == Page::Sound && dragging_.empty())
+            ReadAudio(false);
+        if (page_ == Page::Cast)
+            ReadMode();
+        return true;
+    case WM_MOUSEMOVE: return HandleMouseMove(w, pt);
     case WM_MOUSELEAVE:
         tracking_ = false;
-        if (dragging_.empty()) {
-            hover_.clear();
-            pressed_.clear();
-        }
+        if (dragging_.empty())
+            hover_.clear(), pressed_.clear();
         surface_.Invalidate();
         return true;
     case WM_CAPTURECHANGED:
         if (reinterpret_cast<HWND>(l) != surface_.Hwnd() && ReleasePointer(false))
             surface_.Invalidate();
         return true;
-    case WM_LBUTTONDOWN:
-        if (const float y = float(pt.y) / surface_.Scale(); y < cardTop_ || y >= cardTop_ + shownH_) {
-            Close(); // outside the glass (while it changes size): as a click outside
-            return true;
-        }
-        pressed_ = HitAt(pt);
-        if ((pressed_ == L"slider" && status_.audio) || (pressed_ == L"bright" && CanSetBrightness()) || pressed_.starts_with(L"app:")) {
-            dragging_ = pressed_;
-            SetCapture(surface_.Hwnd());
-            SetSliderAt(dragging_, float(pt.x) / surface_.Scale());
-        } else if (pressed_ == L"mute") {
-            // Mute on release in place; a drag from here moves the slider.
-            downX_ = pt.x;
-            SetCapture(surface_.Hwnd());
-        } else if (!pressed_.empty())
-            surface_.Ripple(float(pt.x) / surface_.Scale(), float(pt.y) / surface_.Scale());
-        surface_.Invalidate();
-        return true;
-    case WM_LBUTTONUP: {
-        const bool volume = dragging_ == L"slider", same = dragging_.empty() && !pressed_.empty() && HitAt(pt) == pressed_;
-        const std::wstring h = pressed_;
-        ReleasePointer();
-        surface_.Invalidate();
-        if (volume && onChanged)
-            onChanged();
-        else if (same)
-            Activate(h);
-        return true;
-    }
-    case WM_MOUSEWHEEL: {
-        int notches = GET_WHEEL_DELTA_WPARAM(w) / WHEEL_DELTA;
-        if (!notches || page_ != Page::Main)
-            return true;
-        std::wstring hit = HitAt(surface_.ScreenToContent(pt));
-        if (hit == L"bright" && brightness_ >= 0) {
-            int v = std::clamp(brightness_ + 2 * notches, 0, 100);
-            if (v != brightness_) {
-                SetBrightnessAsync(v);
-                surface_.Invalidate();
-            }
-        } else if (status_.audio && (hit == L"slider" || hit == L"mute" || hit == L"sound-page") &&
-                   SetVolumeIf(std::clamp(status_.volume + 2 * notches, 0, 100), notches > 0)) {
-            surface_.Invalidate();
-            if (onChanged)
-                onChanged();
-        }
-        return true;
-    }
+    case WM_LBUTTONDOWN: return HandleLeftDown(pt);
+    case WM_LBUTTONUP: return HandleLeftUp(pt);
+    case WM_MOUSEWHEEL: return HandleMouseWheel(w, pt);
     case WM_KEYDOWN:
-        if (w == VK_ESCAPE || (w == VK_BACK && page_ != Page::Main)) {
-            if (page_ != Page::Main)
-                ShowPage(Page::Main);
-            else
-                Close();
-            return true;
-        }
+        if (w == VK_ESCAPE || (w == VK_BACK && page_ != Page::Main))
+            return (page_ != Page::Main ? ShowPage(Page::Main) : Close()), true;
         return false;
     default: return OnAsync(m, w, l);
     }

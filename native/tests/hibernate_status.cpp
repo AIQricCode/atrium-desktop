@@ -53,14 +53,14 @@ int main()
     Check(!failed.visible && !failed.needsEnable, "QueryFailed must not offer enabling hibernation");
 
     Check(!BuildPowerActionNotice(PowerAction::Hibernate, PowerActionStatus::Ok).has_value(), "Ok produces no failure notice");
-    Check(BuildPowerActionNotice(PowerAction::Hibernate, PowerActionStatus::Cancelled)->title == L"Hibernation cancelled",
-          "Cancelled produces cancellation notice");
-    Check(BuildPowerActionNotice(PowerAction::Hibernate, PowerActionStatus::EnableFailed)->title == L"Could not enable hibernation",
-          "EnableFailed produces enable failure notice");
-    Check(BuildPowerActionNotice(PowerAction::Hibernate, PowerActionStatus::ElevationFailed)->title == L"Could not enable hibernation",
-          "ElevationFailed produces enable failure notice");
-    Check(BuildPowerActionNotice(PowerAction::Hibernate, PowerActionStatus::HibernateFailed)->title == L"Could not hibernate",
-          "HibernateFailed produces hibernate failure notice");
+    const auto cancelled = BuildPowerActionNotice(PowerAction::Hibernate, PowerActionStatus::Cancelled);
+    Check(cancelled && cancelled->title == L"Hibernation cancelled", "Cancelled produces cancellation notice");
+    const auto enableFailed = BuildPowerActionNotice(PowerAction::Hibernate, PowerActionStatus::EnableFailed);
+    Check(enableFailed && enableFailed->title == L"Could not enable hibernation", "EnableFailed produces enable failure notice");
+    const auto elevationFailed = BuildPowerActionNotice(PowerAction::Hibernate, PowerActionStatus::ElevationFailed);
+    Check(elevationFailed && elevationFailed->title == L"Could not enable hibernation", "ElevationFailed produces enable failure notice");
+    const auto hibernateFailed = BuildPowerActionNotice(PowerAction::Hibernate, PowerActionStatus::HibernateFailed);
+    Check(hibernateFailed && hibernateFailed->title == L"Could not hibernate", "HibernateFailed produces hibernate failure notice");
 
     return g_failures ? 1 : 0;
 }

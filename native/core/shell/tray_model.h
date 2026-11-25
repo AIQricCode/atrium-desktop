@@ -103,7 +103,11 @@ private:
         tray::Action action = tray::Action::Left;
         bool systemTray = false;
     };
+    struct WorkerState;
     void Worker();
+    bool DequeueWorkerJob(WorkerState& ws, Job& job);
+    void RunClickJob(WorkerState& ws, const Job& job, const tray::ShellSession& session, ULONGLONG findStart);
+    void RunRefreshJob(WorkerState& ws, const tray::ShellSession& session, ULONGLONG findStart);
     bool ClickHosted(const TrayIcon& icon, tray::HostAction action, RECT cell = {});
     void EnqueueUrgent(Job job);
     HWND notify_;

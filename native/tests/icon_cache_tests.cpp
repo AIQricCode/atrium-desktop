@@ -34,7 +34,8 @@ int main()
 
     // 1. IconImage shared read-only pixels & FitToSquare zero-copy fast path.
     const IconImage orig = MakeSolidImage(64);
-    const IconImage copy = orig;
+    IconImage copy;
+    copy = orig;
     const IconImage fitSame = FitToSquare(orig, 64);
     Check(!orig.Empty() && orig.ByteSize() == 64 * 64 * 4, "IconImage reports exact byte size");
     Check(copy.Data() == orig.Data() && fitSame.Data() == orig.Data(), "IconImage copy and same-size FitToSquare share buffer");
@@ -92,6 +93,7 @@ int main()
     // 4. Launchpad #system folder expansion.
     std::vector<CatalogApp> shown = {{L"A", L"a"}, {L"System", L"#system"}, {L"B", L"b"}};
     std::vector<CatalogApp> sys;
+    sys.reserve(12);
     for (int i = 0; i < 12; ++i)
         sys.push_back({L"Sys" + std::to_wstring(i), L"sys" + std::to_wstring(i)});
     const std::vector<std::wstring> pageIds = ExpandLaunchpadPageIds(shown, sys, 0, 10, L"#system");

@@ -27,8 +27,8 @@ bool Contains(const D2D1_RECT_F& r, float x, float y) { return x >= r.left && x 
 
 D2D1_RECT_F PowerCard()
 {
-    constexpr float right = 576.f, bottom = 544.f;
-    return D2D1::RectF(right - kPowerW, bottom - (float(kRowCount) * kPowerRowH + 2.f * kPowerPad), right, bottom);
+    constexpr float kRight = 576.f, kBottom = 544.f;
+    return D2D1::RectF(kRight - kPowerW, kBottom - (float(kRowCount) * kPowerRowH + 2.f * kPowerPad), kRight, kBottom);
 }
 
 D2D1_RECT_F RawRow(const D2D1_RECT_F& card, int index)
@@ -78,9 +78,8 @@ void CheckAllRowsAtScales()
             hits.push_back(hit);
         }
 
-        for (int i = 0; i + 1 < kRowCount; ++i) {
-            Require(hits[size_t(i)].bottom <= hits[size_t(i + 1)].top + kEps && Near(hits[size_t(i)].bottom, hits[size_t(i + 1)].top),
-                    "neighboring scaled rows meet without overlapping");
+        for (size_t i = 0; i + 1 < kRowCount; ++i) {
+            Require(hits[i].bottom <= hits[i + 1].top + kEps && Near(hits[i].bottom, hits[i + 1].top), "neighboring scaled rows meet without overlapping");
         }
     }
 }
@@ -93,6 +92,7 @@ void CheckMidOpenRestartAndShutdown()
 
     for (float k : {0.5f, 0.75f}) {
         std::vector<D2D1_RECT_F> hits;
+        hits.reserve(kRowCount);
         for (int i = 0; i < kRowCount; ++i)
             hits.push_back(ScaleRectAbout(RawRow(card, i), card.right, card.bottom, k));
 

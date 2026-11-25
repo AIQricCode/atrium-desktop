@@ -1276,252 +1276,250 @@ bool TrayModel::Available() const
     return available_;
 }
 
-void TrayModel::Worker()
+namespace {
+
+Found* ResolveClickTarget(const TrayIcon& icon, const tray::ShellSession& session, std::vector<Found>& buttons, const std::vector<int>& match,
+                          const std::vector<Record>& records)
 {
-    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    std::vector<tray::TargetKey> candidates;
+    candidates.reserve(buttons.size());
+    for (size_t b = 0; b < buttons.size(); ++b)
+        candidates.push_back({session, buttons[b].runtimeId, buttons[b].recordId, match[b] >= 0 ? records[size_t(match[b])].exe : L"", buttons[b].tip});
+    const auto resolved = tray::ResolveTarget(icon.Target(), ReadShellSession(), candidates);
+    Log(L"tray: click resolve=%s shellPid=%lu shellStarted=%llu shellWindow=%llu", tray::ResolutionName(resolved.reason), DWORD(session.pid), session.started,
+        session.window);
+    return resolved.index == tray::kNone ? nullptr : &buttons[resolved.index];
+}
+
+template<class Snapshot> bool ObserveTrayResponse(const std::wstring& exe, tray::Action action, const Snapshot& before, bool accepted)
+{
+    const ULONGLONG until = GetTickCount64() + (!accepted ? 40 : action == tray::Action::Right ? 500 : 280);
+    do {
+        if (ResponseChanged(before, CaptureResponse(exe), action))
+            return true;
+        Sleep(20);
+    } while (GetTickCount64() < until);
+    return false;
+}
+
+int32_t InvokeTrayRoute(Found* target, const tray::ShellSession& session, tray::Action action, tray::Route route)
+{
+    HRESULT hr = UIA_E_ELEMENTNOTAVAILABLE;
+    if (target && target->element && session == ReadShellSession()) {
+        const BOOL allowed = AllowSetForegroundWindow(session.pid);
+        Log(L"tray: click foreground-delegate pid=%lu allowed=%d error=%lu", DWORD(session.pid), allowed, allowed ? 0 : GetLastError());
+        if (route == tray::Route::Toolbar)
+            hr = ToolbarClick(*target, action);
+        else if (route == tray::Route::ContextMenu) {
+            auto e3 = target->element.try_as<IUIAutomationElement3>();
+            hr = e3 ? e3->ShowContextMenu() : E_NOINTERFACE;
+        } else if (route == tray::Route::Invoke) {
+            winrt::com_ptr<IUIAutomationInvokePattern> p;
+            hr = target->element->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(p.put()));
+            if (SUCCEEDED(hr))
+                hr = p ? p->Invoke() : E_NOINTERFACE;
+        } else {
+            winrt::com_ptr<IUIAutomationLegacyIAccessiblePattern> p;
+            hr = target->element->GetCurrentPatternAs(UIA_LegacyIAccessiblePatternId, IID_PPV_ARGS(p.put()));
+            if (SUCCEEDED(hr))
+                hr = p ? p->DoDefaultAction() : E_NOINTERFACE;
+        }
+    }
+    Log(L"tray: click attempt route=%s hr=0x%08X", RouteName(route), unsigned(hr));
+    return int32_t(hr);
+}
+
+void LogClickBegin(tray::Action action, const TrayIcon& icon, const Found* target)
+{
+    HWND taskbar = ShellTaskbar(), overflow = OverflowWindow();
+    APPBARDATA abd{sizeof(abd)};
+    BOOL offscreen = TRUE, enabled = FALSE;
+    HRESULT state = target && target->element ? target->element->get_CurrentIsOffscreen(&offscreen) : UIA_E_ELEMENTNOTAVAILABLE;
+    if (target && target->element)
+        target->element->get_CurrentIsEnabled(&enabled);
+    Log(L"tray: click begin action=%s tip='%s' exe='%s' identity=%s source=%s match=%s taskbarVisible=%d autoHide=%d overflowExists=%d "
+        L"overflowVisible=%d offscreen=%d enabled=%d stateHr=0x%08X",
+        ActionName(action), TrayModel::Title(icon.tip).c_str(), icon.exe.c_str(), icon.recordId.c_str(), target && target->element ? L"uia" : L"record",
+        target ? tray::MethodName(target->method) : L"missing", IsWindowVisible(taskbar), (AppBarMessage(ABM_GETSTATE, abd) & ABS_AUTOHIDE) != 0,
+        overflow != nullptr, IsWindowVisible(overflow), offscreen, enabled, unsigned(state));
+}
+} // namespace
+
+struct TrayModel::WorkerState {
     winrt::com_ptr<IUIAutomation> uia;
-    HRESULT created = CoCreateInstance(__uuidof(CUIAutomation8), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(uia.put()));
-    if (FAILED(created))
-        created = CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(uia.put()));
-    if (FAILED(created))
-        Log(L"tray: UI Automation unavailable");
-    if (auto options = uia.try_as<IUIAutomation2>())
-        options->put_ConnectionTimeout(250), options->put_TransactionTimeout(250);
     uint64_t nextImageVersion = 0;
     std::map<std::wstring, Picture> pictures;
-    using Clock = std::chrono::steady_clock;
-    auto retryAt = Clock::time_point::max();
+    std::chrono::steady_clock::time_point retryAt = std::chrono::steady_clock::time_point::max();
     tray::ShellSession recoverySession;
     bool recoveryStarted = false;
     unsigned retries = 0;
-    for (;;) {
-        Job job;
-        {
-            std::unique_lock g(mutex_);
-            if (retryAt == Clock::time_point::max())
-                cv_.wait(g, [&] { return stop_ || !jobs_.empty(); });
-            else
-                cv_.wait_until(g, retryAt, [&] { return stop_ || !jobs_.empty(); });
-            if (stop_)
-                break;
-            if (jobs_.empty()) {
-                job.refresh = true;
-                retryAt = Clock::time_point::max();
-            } else {
-                job = jobs_.front();
-                jobs_.pop_front();
-            }
+};
+
+bool TrayModel::DequeueWorkerJob(WorkerState& ws, Job& job)
+{
+    std::unique_lock g(mutex_);
+    if (ws.retryAt == std::chrono::steady_clock::time_point::max())
+        cv_.wait(g, [&] { return stop_ || !jobs_.empty(); });
+    else
+        cv_.wait_until(g, ws.retryAt, [&] { return stop_ || !jobs_.empty(); });
+    if (stop_)
+        return false;
+    if (jobs_.empty())
+        job.refresh = true, ws.retryAt = std::chrono::steady_clock::time_point::max();
+    else
+        job = jobs_.front(), jobs_.pop_front();
+    return true;
+}
+
+void TrayModel::RunClickJob(WorkerState& ws, const Job& job, const tray::ShellSession& initialSession, ULONGLONG findStart)
+{
+    tray::ShellSession session = initialSession;
+    bool available = false, ordered = false;
+    std::vector<Record> records;
+    std::vector<Found> buttons;
+    const auto appNames = appNames_ ? appNames_() : std::vector<PinnedApp>{};
+    auto acquire = [&]() {
+        buttons = FindButtons(ws.uia.get(), available);
+        auto match = MatchButtons(buttons, records, ordered, appNames);
+        return ResolveClickTarget(job.icon, session, buttons, match, records);
+    };
+    Found* target = acquire();
+    LogClickBegin(job.action, job.icon, target);
+    const auto before = CaptureResponse(job.icon.exe);
+    auto observe = [&](bool accepted) { return ObserveTrayResponse(job.icon.exe, job.action, before, accepted); };
+    auto invoke = [&](tray::Route route) { return InvokeTrayRoute(target, session, job.action, route); };
+    auto result = tray::Dispatch(job.action, target && target->toolbar, invoke, observe);
+    if (target && target->element && result.outcome == tray::Outcome::Unavailable && !result.attempts.empty() &&
+        result.attempts.front().status == int32_t(UIA_E_ELEMENTNOTAVAILABLE)) {
+        session = ReadShellSession();
+        target = acquire();
+        Log(L"tray: click reacquire resolved=%d", target != nullptr);
+        result = tray::Dispatch(job.action, target && target->toolbar, invoke, observe);
+    }
+    if (job.action == tray::Action::Right && result.outcome != tray::Outcome::Observed && target && target->element && !target->toolbar &&
+        session == ReadShellSession()) {
+        const HRESULT hr = PointerRightClick(ws.uia.get(), *target);
+        Log(L"tray: click attempt route=pointer hr=0x%08X", unsigned(hr));
+        if (hr == S_OK)
+            result.outcome = observe(true) ? tray::Outcome::Observed : tray::Outcome::AcceptedUnconfirmed;
+        else if (hr == E_ABORT && result.outcome == tray::Outcome::Unavailable)
+            result.outcome = tray::Outcome::AcceptedUnconfirmed;
+    }
+    for (const auto& attempt : result.attempts)
+        Log(L"tray: click evidence route=%s observed=%d", RouteName(attempt.route), attempt.observed);
+    if (result.outcome == tray::Outcome::AcceptedUnconfirmed) {
+        Log(L"tray: click end result=accepted-unconfirmed elapsed=%llu ms", GetTickCount64() - findStart);
+        PostMessageW(notify_, msg_, 4, 0);
+        return;
+    }
+    bool observed = result.outcome == tray::Outcome::Observed;
+    if (!observed && job.action != tray::Action::Right && !job.icon.exe.empty() && !tray::IsShellExplorerExe(job.icon.exe))
+        observed = ForegroundExisting(job.icon.exe), Log(L"tray: click foreground-existing observed=%d", observed);
+    const bool shown = !observed && ShowOverflow(ws.uia.get());
+    Log(L"tray: click end result=%s elapsed=%llu ms", observed ? L"observed" : shown ? L"system-tray" : L"needs-user", GetTickCount64() - findStart);
+    PostMessageW(notify_, msg_, observed ? 1 : shown ? 2 : 3, 0);
+}
+
+void TrayModel::RunRefreshJob(WorkerState& ws, const tray::ShellSession& session, ULONGLONG findStart)
+{
+    bool available = false, ordered = false;
+    std::vector<Found> buttons = FindButtons(ws.uia.get(), available);
+    const ULONGLONG readMs = GetTickCount64() - findStart;
+    const auto appNames = appNames_ ? appNames_() : std::vector<PinnedApp>{};
+    std::vector<Record> records;
+    ReadDiagnostics diagnostics;
+    std::vector<int> match = MatchButtons(buttons, records, ordered, appNames, &diagnostics);
+    if (session != ReadShellSession()) {
+        Log(L"tray: discarded refresh spanning shell replacement");
+        Refresh();
+        return;
+    }
+    if (!session.Valid())
+        buttons.clear(), match.clear(), available = false;
+    std::vector<TrayIcon> icons;
+    std::set<std::wstring> livePictures;
+    int recognised = 0;
+    for (size_t b = 0; b < buttons.size(); ++b) {
+        TrayIcon t;
+        t.tip = buttons[b].tip, t.promoted = buttons[b].promoted, t.index = buttons[b].index, t.recordId = buttons[b].recordId;
+        t.runtimeId = buttons[b].runtimeId, t.shell = session, t.matchMethod = tray::MethodName(buttons[b].method), t.fromRecord = !buttons[b].element;
+        if (match[b] >= 0) {
+            const Record& r = records[size_t(match[b])];
+            t.exe = r.exe, t.order = r.order, ++recognised, livePictures.insert(r.id);
+            auto& pic = ws.pictures[r.id];
+            ResolveRecordPicture(r, t.recordId, pic, ws.nextImageVersion);
+            t.imageVersion = pic.version, t.image = pic.image, t.inked = pic.inked, t.inkedOnLight = pic.inkedOnLight;
         }
-        if (!uia) {
-            if (!job.refresh)
+        icons.push_back(std::move(t));
+    }
+    std::erase_if(ws.pictures, [&](const auto& item) { return !livePictures.contains(item.first); });
+    std::map<std::wstring, size_t> windowsOrder = BuildWindowsOrder(records);
+    bool changed = false;
+    {
+        std::lock_guard g(mutex_);
+        windowsOrder_ = std::move(windowsOrder);
+        changed = !loaded_ || available != available_ || icons.size() != icons_.size() ||
+                  !std::equal(icons.begin(), icons.end(), icons_.begin(), [](const TrayIcon& a, const TrayIcon& b) {
+                      return a.tip == b.tip && a.exe == b.exe && a.image == b.image && a.promoted == b.promoted && a.recordId == b.recordId &&
+                             a.runtimeId == b.runtimeId && a.shell == b.shell && a.matchMethod == b.matchMethod && a.fromRecord == b.fromRecord;
+                  });
+        icons_ = std::move(icons), loaded_ = true, available_ = available;
+    }
+    if (changed || session != lastReconcileSession_ || diagnostics.records != lastReconcileRecords_ || diagnostics.live != lastReconcileLive_) {
+        lastReconcileSession_ = session, lastReconcileRecords_ = diagnostics.records, lastReconcileLive_ = diagnostics.live;
+        Log(L"tray: reconcile records=%zu live=%zu aliases=%zu sharedPlace=%zu unknown=%zu uiaMs=%llu", diagnostics.records, diagnostics.live,
+            diagnostics.aliases, diagnostics.shared, diagnostics.unknown, readMs);
+    }
+    if (diagnostics.records > 0 && diagnostics.live == 0)
+        LogShellTrayWindows();
+    LogTrayRefresh(changed, buttons.size(), recognised, ordered, buttons, records, match, GetTickCount64() - findStart, readMs, available);
+    if (changed)
+        PostMessageW(notify_, msg_, 0, 0);
+}
+
+void TrayModel::Worker()
+{
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    WorkerState ws;
+    HRESULT created = CoCreateInstance(__uuidof(CUIAutomation8), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(ws.uia.put()));
+    if (FAILED(created))
+        created = CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(ws.uia.put()));
+    if (FAILED(created))
+        Log(L"tray: UI Automation unavailable");
+    if (auto options = ws.uia.try_as<IUIAutomation2>())
+        options->put_ConnectionTimeout(250), options->put_TransactionTimeout(250);
+    for (Job job; DequeueWorkerJob(ws, job);) {
+        if (!ws.uia) {
+            if (!job.refresh) {
                 PostMessageW(notify_, msg_, ShowOverflow(nullptr) ? 2 : 3, 0);
-            else {
+            } else {
                 std::lock_guard g(mutex_);
-                loaded_ = true;
-                available_ = false;
+                loaded_ = true, available_ = false;
             }
             continue;
         }
         try {
-            bool available = false;
             const ULONGLONG findStart = GetTickCount64();
             if (job.systemTray) {
-                const bool shown = ShowOverflow(uia.get());
-                PostMessageW(notify_, msg_, shown ? 5 : 3, 0);
+                PostMessageW(notify_, msg_, ShowOverflow(ws.uia.get()) ? 5 : 3, 0);
                 continue;
             }
-            auto session = ReadShellSession();
-            if (!recoveryStarted || session != recoverySession) {
-                recoveryStarted = true;
-                recoverySession = session;
-                retries = 5;
+            const auto session = ReadShellSession();
+            if (!ws.recoveryStarted || session != ws.recoverySession)
+                ws.recoveryStarted = true, ws.recoverySession = session, ws.retries = 5;
+            if (job.refresh && ws.retries) {
+                const unsigned delay = 500u << (5 - ws.retries--);
+                ws.retryAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay);
+                Log(L"tray: shell recovery refresh scheduled delayMs=%u remaining=%u", delay, ws.retries);
             }
-            if (job.refresh && retries) {
-                const unsigned delay = 500u << (5 - retries--);
-                retryAt = Clock::now() + std::chrono::milliseconds(delay);
-                Log(L"tray: shell recovery refresh scheduled delayMs=%u remaining=%u", delay, retries);
-            }
-            std::vector<Found> buttons = FindButtons(uia.get(), available);
-            const ULONGLONG readMs = GetTickCount64() - findStart;
-            auto appNames = appNames_ ? appNames_() : std::vector<PinnedApp>{};
-            if (!job.refresh) {
-                bool ordered = false;
-                std::vector<Record> records;
-                auto match = MatchButtons(buttons, records, ordered, appNames);
-                auto resolve = [&]() -> Found* {
-                    std::vector<tray::TargetKey> candidates;
-                    candidates.reserve(buttons.size());
-                    for (size_t b = 0; b < buttons.size(); ++b)
-                        candidates.push_back(
-                            {session, buttons[b].runtimeId, buttons[b].recordId, match[b] >= 0 ? records[size_t(match[b])].exe : L"", buttons[b].tip});
-                    const auto resolved = tray::ResolveTarget(job.icon.Target(), ReadShellSession(), candidates);
-                    Log(L"tray: click resolve=%s shellPid=%lu shellStarted=%llu shellWindow=%llu", tray::ResolutionName(resolved.reason), DWORD(session.pid),
-                        session.started, session.window);
-                    return resolved.index == tray::kNone ? nullptr : &buttons[resolved.index];
-                };
-                Found* target = resolve();
-                HWND taskbar = ShellTaskbar(), overflow = OverflowWindow();
-                APPBARDATA abd{sizeof(abd)};
-                BOOL offscreen = TRUE, enabled = FALSE;
-                HRESULT state = target && target->element ? target->element->get_CurrentIsOffscreen(&offscreen) : UIA_E_ELEMENTNOTAVAILABLE;
-                if (target && target->element)
-                    target->element->get_CurrentIsEnabled(&enabled);
-                Log(L"tray: click begin action=%s tip='%s' exe='%s' identity=%s source=%s match=%s taskbarVisible=%d autoHide=%d overflowExists=%d "
-                    L"overflowVisible=%d offscreen=%d enabled=%d stateHr=0x%08X",
-                    ActionName(job.action), Title(job.icon.tip).c_str(), job.icon.exe.c_str(), job.icon.recordId.c_str(),
-                    target && target->element ? L"uia" : L"record", target ? tray::MethodName(target->method) : L"missing", IsWindowVisible(taskbar),
-                    (AppBarMessage(ABM_GETSTATE, abd) & ABS_AUTOHIDE) != 0, overflow != nullptr, IsWindowVisible(overflow), offscreen, enabled,
-                    unsigned(state));
-                const auto before = CaptureResponse(job.icon.exe);
-                auto observe = [&](bool accepted) {
-                    // A context menu (Steam's, toolkits') can take longer to show than a window.
-                    const ULONGLONG until = GetTickCount64() + (!accepted ? 40 : job.action == tray::Action::Right ? 500 : 280);
-                    do {
-                        if (ResponseChanged(before, CaptureResponse(job.icon.exe), job.action))
-                            return true;
-                        Sleep(20);
-                    } while (GetTickCount64() < until);
-                    return false;
-                };
-                auto invoke = [&](tray::Route route) -> int32_t {
-                    HRESULT hr = UIA_E_ELEMENTNOTAVAILABLE;
-                    if (target && target->element && session == ReadShellSession()) {
-                        // Explorer performs the notification-area callback. Grant only that
-                        // process, never ASFW_ANY or a PID inferred from a GUID rectangle.
-                        const BOOL allowed = AllowSetForegroundWindow(session.pid);
-                        Log(L"tray: click foreground-delegate pid=%lu allowed=%d error=%lu", DWORD(session.pid), allowed, allowed ? 0 : GetLastError());
-                        if (route == tray::Route::Toolbar)
-                            hr = ToolbarClick(*target, job.action);
-                        else if (route == tray::Route::ContextMenu) {
-                            auto e3 = target->element.try_as<IUIAutomationElement3>();
-                            hr = e3 ? e3->ShowContextMenu() : E_NOINTERFACE;
-                        } else if (route == tray::Route::Invoke) {
-                            winrt::com_ptr<IUIAutomationInvokePattern> pattern;
-                            hr = target->element->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(pattern.put()));
-                            if (SUCCEEDED(hr))
-                                hr = pattern ? pattern->Invoke() : E_NOINTERFACE;
-                        } else {
-                            winrt::com_ptr<IUIAutomationLegacyIAccessiblePattern> pattern;
-                            hr = target->element->GetCurrentPatternAs(UIA_LegacyIAccessiblePatternId, IID_PPV_ARGS(pattern.put()));
-                            if (SUCCEEDED(hr))
-                                hr = pattern ? pattern->DoDefaultAction() : E_NOINTERFACE;
-                        }
-                    }
-                    Log(L"tray: click attempt route=%s hr=0x%08X", RouteName(route), unsigned(hr));
-                    return int32_t(hr);
-                };
-                auto result = tray::Dispatch(job.action, target && target->toolbar, invoke, observe);
-                // Reacquire only after a definite stale-element error. Generic E_FAIL is not evidence of staleness.
-                if (target && target->element && result.outcome == tray::Outcome::Unavailable && !result.attempts.empty() &&
-                    result.attempts.front().status == int32_t(UIA_E_ELEMENTNOTAVAILABLE)) {
-                    session = ReadShellSession();
-                    buttons = FindButtons(uia.get(), available);
-                    match = MatchButtons(buttons, records, ordered, appNames);
-                    target = resolve();
-                    Log(L"tray: click reacquire resolved=%d", target != nullptr);
-                    result = tray::Dispatch(job.action, target && target->toolbar, invoke, observe);
-                }
-                // A right click the shell took without a menu showing: one real click on the button (#28).
-                if (job.action == tray::Action::Right && result.outcome != tray::Outcome::Observed && target && target->element && !target->toolbar &&
-                    session == ReadShellSession()) {
-                    const HRESULT hr = PointerRightClick(uia.get(), *target);
-                    Log(L"tray: click attempt route=pointer hr=0x%08X", unsigned(hr));
-                    if (hr == S_OK)
-                        result.outcome = observe(true) ? tray::Outcome::Observed : tray::Outcome::AcceptedUnconfirmed;
-                    else if (hr == E_ABORT && result.outcome == tray::Outcome::Unavailable)
-                        result.outcome = tray::Outcome::AcceptedUnconfirmed; // the user moved on: no fallback popup
-                }
-                bool observed = result.outcome == tray::Outcome::Observed;
-                for (const auto& attempt : result.attempts)
-                    Log(L"tray: click evidence route=%s observed=%d", RouteName(attempt.route), attempt.observed);
-                if (result.outcome == tray::Outcome::AcceptedUnconfirmed) {
-                    Log(L"tray: click end result=accepted-unconfirmed elapsed=%llu ms", GetTickCount64() - findStart);
-                    PostMessageW(notify_, msg_, 4, 0);
-                    continue;
-                }
-                // Only an existing visible/minimized main window, and only for a left action.
-                if (!observed && job.action != tray::Action::Right && !job.icon.exe.empty() && !tray::IsShellExplorerExe(job.icon.exe)) {
-                    observed = ForegroundExisting(job.icon.exe);
-                    Log(L"tray: click foreground-existing observed=%d", observed);
-                }
-                const bool shown = !observed && ShowOverflow(uia.get());
-                Log(L"tray: click end result=%s elapsed=%llu ms",
-                    observed ? L"observed" :
-                    shown    ? L"system-tray" :
-                               L"needs-user",
-                    GetTickCount64() - findStart);
-                PostMessageW(notify_, msg_, observed ? 1 : shown ? 2 : 3, 0);
-                continue;
-            }
-
-            bool ordered = false;
-            std::vector<Record> records;
-            const ULONGLONG readStart = findStart;
-            ReadDiagnostics diagnostics;
-            std::vector<int> match = MatchButtons(buttons, records, ordered, appNames, &diagnostics);
-            if (session != ReadShellSession()) {
-                Log(L"tray: discarded refresh spanning shell replacement");
-                Refresh();
-                continue;
-            }
-            if (!session.Valid())
-                buttons.clear(), match.clear(), available = false;
-
-            std::vector<TrayIcon> icons;
-            std::set<std::wstring> livePictures;
-            int recognised = 0;
-            for (size_t b = 0; b < buttons.size(); ++b) {
-                TrayIcon t;
-                t.tip = buttons[b].tip, t.promoted = buttons[b].promoted, t.index = buttons[b].index, t.recordId = buttons[b].recordId;
-                t.runtimeId = buttons[b].runtimeId, t.shell = session, t.matchMethod = tray::MethodName(buttons[b].method);
-                t.fromRecord = !buttons[b].element;
-                if (match[b] >= 0) {
-                    const Record& r = records[size_t(match[b])];
-                    t.exe = r.exe, t.order = r.order, ++recognised;
-                    livePictures.insert(r.id);
-                    auto& pic = pictures[r.id];
-                    ResolveRecordPicture(r, t.recordId, pic, nextImageVersion);
-                    t.imageVersion = pic.version, t.image = pic.image, t.inked = pic.inked, t.inkedOnLight = pic.inkedOnLight;
-                }
-                icons.push_back(std::move(t));
-            }
-            std::erase_if(pictures, [&](const auto& item) { return !livePictures.contains(item.first); });
-            // Windows' own order of the icons, for a list that does not depend on how much of
-            // Explorer's tray has been built (and for the hosted icons).
-            std::map<std::wstring, size_t> windowsOrder = BuildWindowsOrder(records);
-            bool changed;
-            {
-                std::lock_guard g(mutex_);
-                windowsOrder_ = std::move(windowsOrder);
-                changed = !loaded_ || available != available_ || icons.size() != icons_.size() ||
-                          !std::equal(icons.begin(), icons.end(), icons_.begin(), [](const TrayIcon& a, const TrayIcon& b) {
-                              return a.tip == b.tip && a.exe == b.exe && a.image == b.image && a.promoted == b.promoted && a.recordId == b.recordId &&
-                                     a.runtimeId == b.runtimeId && a.shell == b.shell && a.matchMethod == b.matchMethod && a.fromRecord == b.fromRecord;
-                          });
-                icons_ = std::move(icons);
-                loaded_ = true;
-                available_ = available;
-            }
-            // Also when only the counts or Explorer changed: an empty list staying empty says nothing (#146).
-            if (changed || session != lastReconcileSession_ || diagnostics.records != lastReconcileRecords_ || diagnostics.live != lastReconcileLive_) {
-                lastReconcileSession_ = session;
-                lastReconcileRecords_ = diagnostics.records;
-                lastReconcileLive_ = diagnostics.live;
-                Log(L"tray: reconcile records=%zu live=%zu aliases=%zu sharedPlace=%zu unknown=%zu uiaMs=%llu", diagnostics.records, diagnostics.live,
-                    diagnostics.aliases, diagnostics.shared, diagnostics.unknown, readMs);
-            }
-            if (diagnostics.records > 0 && diagnostics.live == 0)
-                LogShellTrayWindows();
-            LogTrayRefresh(changed, buttons.size(), recognised, ordered, buttons, records, match, GetTickCount64() - readStart, readMs, available);
-            if (changed)
-                PostMessageW(notify_, msg_, 0, 0);
+            job.refresh ? RunRefreshJob(ws, session, findStart) : RunClickJob(ws, job, session, findStart);
         } catch (...) {
             Log(L"tray: worker exception job=%s hr=0x%08X", job.refresh ? L"refresh" : L"click", unsigned(winrt::to_hresult()));
             if (!job.refresh)
                 PostMessageW(notify_, msg_, 3, 0);
         }
     }
-    uia = nullptr;
+    ws.uia = nullptr;
     winrt::uninit_apartment();
 }
 

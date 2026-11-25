@@ -57,12 +57,10 @@ template<class Container, class SignalFn, class WaitFn> bool StopWithinDeadline(
     for (const auto& item : items)
         signal(item);
     const ULONGLONG deadline = GetTickCount64() + timeoutMs;
-    for (const auto& item : items) {
+    return std::ranges::all_of(items, [&](const auto& item) {
         const ULONGLONG now = GetTickCount64();
-        if (!wait(item, now < deadline ? DWORD(deadline - now) : 0))
-            return false;
-    }
-    return true;
+        return wait(item, now < deadline ? DWORD(deadline - now) : 0);
+    });
 }
 
 template<class T, class WaitFn> void CollectSlowWithinDeadline(std::vector<T>& retired, std::vector<T>& slow, DWORD timeoutMs, WaitFn&& wait)

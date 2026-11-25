@@ -365,7 +365,7 @@ foreach (var (k, node) in schemaKeys)
 
 var psi = new ProcessStartInfo(normalizerPath, "--normalize");
 psi.RedirectStandardInput = psi.RedirectStandardOutput = true;
-psi.StandardInputEncoding = psi.StandardOutputEncoding = new System.Text.UTF8Encoding(false);
+psi.StandardInputEncoding = psi.StandardOutputEncoding = new UTF8Encoding(false);
 using var proc = Process.Start(psi)!;
 var readTask = Task.Run(() =>
 {
@@ -407,10 +407,10 @@ static bool JsonEqual(JsonNode? a, JsonNode? b)
     {
         if (av.TryGetValue(out bool ab) && bv.TryGetValue(out bool bb)) return ab == bb;
         if (av.TryGetValue(out string? astr) && bv.TryGetValue(out string? bstr)) return astr == bstr;
-        if (av.GetValueKind() == System.Text.Json.JsonValueKind.Number && bv.GetValueKind() == System.Text.Json.JsonValueKind.Number)
+        if (av.GetValueKind() == JsonValueKind.Number && bv.GetValueKind() == JsonValueKind.Number)
         {
-            double ad = double.Parse(av.ToJsonString(), System.Globalization.CultureInfo.InvariantCulture);
-            double bd = double.Parse(bv.ToJsonString(), System.Globalization.CultureInfo.InvariantCulture);
+            double ad = double.Parse(av.ToJsonString(), CultureInfo.InvariantCulture);
+            double bd = double.Parse(bv.ToJsonString(), CultureInfo.InvariantCulture);
             return Math.Abs(ad - bd) <= 1e-9;
         }
     }
@@ -488,8 +488,8 @@ var schemaSliders = schemaKeys.Where(kv => kv.Value!["sliderProp"] != null)
 Require(sliderMatches.Count == schemaSliders.Count, $"Expected {schemaSliders.Count} sliders in MainWindow.xaml.cs, found {sliderMatches.Count}.");
 foreach (Match m in sliderMatches)
 {
-    double uiMin = double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
-    double uiMax = double.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
+    double uiMin = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+    double uiMax = double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
     string prop = m.Groups[3].Value;
     Require(schemaSliders.TryGetValue(prop, out var entry), $"Slider property {prop} missing from schema.");
     var sp = entry.Spec;
@@ -722,7 +722,7 @@ finally
         Require(concurrentLoaded.Height is >= 40 and <= 47 && !Directory.EnumerateFiles(persistTemp, "*.tmp").Any(),
             "Concurrent WriteSettings must serialize cleanly without .tmp leftovers.");
 
-        byte[] corruptBytes = System.Text.Encoding.UTF8.GetBytes("{broken-cs");
+        byte[] corruptBytes = Encoding.UTF8.GetBytes("{broken-cs");
         File.WriteAllBytes(settingsPath, corruptBytes);
         var fallback = SettingsPersistence.ReadSettings(settingsPath);
         Require(fallback.Height == new BarSettings().Height && File.ReadAllBytes(settingsPath).SequenceEqual(corruptBytes),
@@ -736,14 +736,14 @@ finally
 
         for (int i = 0; i < 4; i++)
         {
-            File.WriteAllText(settingsPath, $"{{broken-round-{i}", new System.Text.UTF8Encoding(false));
+            File.WriteAllText(settingsPath, $"{{broken-round-{i}", new UTF8Encoding(false));
             SettingsPersistence.WriteSettings(settingsPath, new BarSettings { Height = 64 });
         }
         Require(Directory.GetFiles(persistTemp, "settings.corrupt.*.json").Length == 3 &&
                 SettingsPersistence.ReadSettings(settingsPath).Height == 64,
             "WriteSettings must cap corrupt backups at 3 and persist valid settings.");
 
-        byte[] lockedCorrupt = System.Text.Encoding.UTF8.GetBytes("{broken-no-backup");
+        byte[] lockedCorrupt = Encoding.UTF8.GetBytes("{broken-no-backup");
         File.WriteAllBytes(settingsPath, lockedCorrupt);
         bool localizedCalled = false;
         ExpectThrows<IOException>(
@@ -753,7 +753,7 @@ finally
         Require(localizedCalled && File.ReadAllBytes(settingsPath).SequenceEqual(lockedCorrupt),
             "Failed corrupt backup must preserve original bytes and invoke localize callback.");
 
-        byte[] futureBytes = System.Text.Encoding.UTF8.GetBytes("""{"version":99,"height":80,"futureNested":{"k":"v"}}""");
+        byte[] futureBytes = Encoding.UTF8.GetBytes("""{"version":99,"height":80,"futureNested":{"k":"v"}}""");
         File.WriteAllBytes(settingsPath, futureBytes);
         var futureRead = SettingsPersistence.ReadSettings(settingsPath);
         Require(futureRead.Height == 80, "ReadSettings must parse compatible fields from future version read-only.");

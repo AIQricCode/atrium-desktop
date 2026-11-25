@@ -1,5 +1,6 @@
 #include "ui/widget_refresh_policy.h"
 
+#include <algorithm>
 #include <iostream>
 
 using atrium::ShouldSampleDisk;
@@ -36,11 +37,7 @@ bool CheckMinuteRefreshPolicy()
         {WidgetKind::Bluetooth, false, "Bluetooth does not need minute refresh"},
         {WidgetKind::Network, false, "Network does not need minute refresh"},
     };
-    for (const auto& c : cases) {
-        if (!Require(WidgetNeedsMinuteRefresh(c.kind) == c.expected, c.name))
-            return false;
-    }
-    return true;
+    return std::ranges::all_of(cases, [](const Case& c) { return Require(WidgetNeedsMinuteRefresh(c.kind) == c.expected, c.name); });
 }
 
 bool CheckDiskSamplingCadence()

@@ -130,6 +130,11 @@ private:
     float PaintHeader(Canvas& c, const Theme& t, D2D1_RECT_F card, const std::wstring& title, bool on, const std::wstring& toggleId);
     void Switch(Canvas& c, const Theme& t, D2D1_RECT_F r, bool on, float hv);
     bool Message(UINT m, WPARAM w, LPARAM l, LRESULT& result);
+    bool HandleWorkerMessage(UINT m, WPARAM w);
+    bool HandleMouseMove(WPARAM w, POINT pt);
+    bool HandleLeftDown(POINT pt);
+    bool HandleLeftUp(POINT pt);
+    bool HandleMouseWheel(WPARAM w, POINT pt);
     bool ReleasePointer(bool releaseCapture = true);
     std::wstring HitAt(POINT pt) const;
     void Activate(const std::wstring& id);

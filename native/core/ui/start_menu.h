@@ -148,6 +148,14 @@ private:
     void PaintGrip(Canvas& c, const Theme& t);
     void PaintDots(Canvas& c, const Theme& t, int pages, float current, float y, const wchar_t* prefix);
     bool Message(UINT m, WPARAM w, LPARAM l, LRESULT& result);
+    bool HandleMouseMove(WPARAM w, POINT pt);
+    bool HandleLeftDown(POINT pt, POINT content);
+    bool HandleLeftUp(POINT pt);
+    bool HandleMouseWheel(UINT m, WPARAM w, POINT pt);
+    bool HandleKeyDown(WPARAM w);
+    bool HandleChar(WPARAM w, LRESULT& result);
+    void HandleEscapeKey();
+    void HandleReturnKey();
 
     // The tiles, the rows.
     void Rebuild();

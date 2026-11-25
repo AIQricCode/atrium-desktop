@@ -88,6 +88,7 @@ add_library(atrium_core_lib STATIC
     ui/popup_theme.cpp
     ui/canvas.cpp
     ui/start_menu.cpp
+    ui/start_menu_input.cpp
     ui/start_menu_menus.cpp
     ui/notifications.cpp
     ui/notification_popup.cpp

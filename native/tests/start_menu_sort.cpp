@@ -161,7 +161,7 @@ void CheckLargeMixedSort()
         if (inHidden)
             hiddenNames.push_back(name);
         else
-            sortedItems.push_back({prevHeading, name});
+            sortedItems.emplace_back(prevHeading, name);
     }
 
     Require(sortedItems.size() == 83, "all 8 non-empty folders and 75 visible apps appear");
