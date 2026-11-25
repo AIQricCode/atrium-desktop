@@ -179,6 +179,8 @@ private:
     void Unpark(const Set& keys, HWND front, bool activate, const std::unordered_map<HWND, Pose>* fly = nullptr, bool moveBeside = true);
     void Pick(const Set& keys, bool add, HWND front = nullptr);
     void PictureTaken();       // WM_STAGE_PICTURE
+    void ApplyShrinkResult(const WindowSnapshots::Result& r);
+    void ScheduleOldLargeShrinks();
     void Launch();             // the flight layer, up for a flight
     void Foresee();            // pictures of the stage's windows, ahead of a pick
     void PutDown(HWND window, bool fly); // minimizes a window put away, once; its picture flies to the strip

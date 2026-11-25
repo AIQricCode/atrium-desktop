@@ -156,9 +156,9 @@ bool TestAsyncRequestShrink()
     bool ok = true;
     {
         atrium::WindowSnapshots snapshots(notify, kMsg);
-        constexpr int sw = 200, sh = 120, stride = sw * 4;
-        const auto src = MakePatternBgra(sw, sh, stride);
-        auto large = std::make_shared<WindowPicture>(BuildWindowPictureFromBgra(src.data(), sw, sh, stride, sw, sh, 12.f, false));
+        constexpr int kSrcW = 200, kSrcH = 120, kStride = kSrcW * 4;
+        const auto src = MakePatternBgra(kSrcW, kSrcH, kStride);
+        auto large = std::make_shared<WindowPicture>(BuildWindowPictureFromBgra(src.data(), kSrcW, kSrcH, kStride, kSrcW, kSrcH, 12.f, false));
         large->corner = 12.f;
 
         snapshots.RequestShrink(notify, 7, large, 100);
@@ -214,11 +214,11 @@ int main()
 {
     // 1. Same-size fast path with non-tight stride and varying source alpha (0, 128, 255).
     {
-        constexpr int sw = 64, sh = 48, stride = (64 + 7) * 4;
-        const auto src = MakePatternBgra(sw, sh, stride);
+        constexpr int kSrcW = 64, kSrcH = 48, kStride = (64 + 7) * 4;
+        const auto src = MakePatternBgra(kSrcW, kSrcH, kStride);
         for (bool shadow : {true, false}) {
-            const WindowPicture actual = BuildWindowPictureFromBgra(src.data(), sw, sh, stride, sw, sh, 8.f, shadow);
-            const WindowPicture ref = LegacyReference(src.data(), sw, sh, stride, sw, sh, 8.f, shadow);
+            const WindowPicture actual = BuildWindowPictureFromBgra(src.data(), kSrcW, kSrcH, kStride, kSrcW, kSrcH, 8.f, shadow);
+            const WindowPicture ref = LegacyReference(src.data(), kSrcW, kSrcH, kStride, kSrcW, kSrcH, 8.f, shadow);
             if (!CheckMatch(actual, ref, shadow ? "same-size non-tight stride shadow=true" : "same-size non-tight stride shadow=false"))
                 return 1;
         }
@@ -226,29 +226,29 @@ int main()
 
     // 2. Integer downscale (128x96 -> 32x24, radius=6.f).
     {
-        constexpr int sw = 128, sh = 96, stride = sw * 4, tw = 32, th = 24;
-        const auto src = MakePatternBgra(sw, sh, stride);
-        const WindowPicture actual = BuildWindowPictureFromBgra(src.data(), sw, sh, stride, tw, th, 6.f, true);
-        const WindowPicture ref = LegacyReference(src.data(), sw, sh, stride, tw, th, 6.f, true);
+        constexpr int kSrcW = 128, kSrcH = 96, kStride = kSrcW * 4, kDstW = 32, kDstH = 24;
+        const auto src = MakePatternBgra(kSrcW, kSrcH, kStride);
+        const WindowPicture actual = BuildWindowPictureFromBgra(src.data(), kSrcW, kSrcH, kStride, kDstW, kDstH, 6.f, true);
+        const WindowPicture ref = LegacyReference(src.data(), kSrcW, kSrcH, kStride, kDstW, kDstH, 6.f, true);
         if (!CheckMatch(actual, ref, "integer downscale 128x96 -> 32x24"))
             return 1;
     }
 
     // 3. Non-integer downscale with non-tight stride (137x93, stride=145*4 -> 53x41, radius=7.5f).
     {
-        constexpr int sw = 137, sh = 93, stride = 145 * 4, tw = 53, th = 41;
-        const auto src = MakePatternBgra(sw, sh, stride);
-        const WindowPicture actual = BuildWindowPictureFromBgra(src.data(), sw, sh, stride, tw, th, 7.5f, true);
-        const WindowPicture ref = LegacyReference(src.data(), sw, sh, stride, tw, th, 7.5f, true);
+        constexpr int kSrcW = 137, kSrcH = 93, kStride = 145 * 4, kDstW = 53, kDstH = 41;
+        const auto src = MakePatternBgra(kSrcW, kSrcH, kStride);
+        const WindowPicture actual = BuildWindowPictureFromBgra(src.data(), kSrcW, kSrcH, kStride, kDstW, kDstH, 7.5f, true);
+        const WindowPicture ref = LegacyReference(src.data(), kSrcW, kSrcH, kStride, kDstW, kDstH, 7.5f, true);
         if (!CheckMatch(actual, ref, "non-integer downscale 137x93 -> 53x41"))
             return 1;
     }
 
     // 4. Smaller() round-trip on a padded WindowPicture (200x120 -> largeMax=100).
     {
-        constexpr int sw = 200, sh = 120, stride = sw * 4;
-        const auto src = MakePatternBgra(sw, sh, stride);
-        WindowPicture large = BuildWindowPictureFromBgra(src.data(), sw, sh, stride, sw, sh, 12.f, false);
+        constexpr int kSrcW = 200, kSrcH = 120, kStride = kSrcW * 4;
+        const auto src = MakePatternBgra(kSrcW, kSrcH, kStride);
+        WindowPicture large = BuildWindowPictureFromBgra(src.data(), kSrcW, kSrcH, kStride, kSrcW, kSrcH, 12.f, false);
         large.corner = 12.f;
 
         const WindowPicture smaller = Smaller(large, 100);

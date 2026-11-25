@@ -181,8 +181,8 @@ void CheckOffscreenRestorePlan(auto& check)
     check(sliverPlan.shouldRestore && RectEq(sliverPlan.workspaceRect, {710, 216, 1210, 816}),
           "barely-overlapping rcNormalPosition (< 64px visible) is recentered to primary work area");
 
-    const HMONITOR monA = reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(0x1001));
-    const HMONITOR monB = reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(0x1002));
+    auto* const monA = reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(0x1001));
+    auto* const monB = reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(0x1002));
     check(OffscreenBelongsToMonitor(monB, nullptr, nullptr, monA), "null targetMonitor accepts any window");
     check(OffscreenBelongsToMonitor(monB, monA, monB, monA), "on-screen window uses windowNearestMonitor");
     check(!OffscreenBelongsToMonitor(monB, monA, monA, monA), "on-screen window on another monitor is excluded");

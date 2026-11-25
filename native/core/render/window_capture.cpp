@@ -17,6 +17,19 @@
 
 namespace atrium {
 
+struct WindowCaptureSignal {
+    HANDLE event = nullptr;
+    std::atomic<bool> active{false};
+    WindowCaptureSignal() = default;
+    WindowCaptureSignal(const WindowCaptureSignal&) = delete;
+    WindowCaptureSignal& operator=(const WindowCaptureSignal&) = delete;
+    ~WindowCaptureSignal()
+    {
+        if (event)
+            CloseHandle(event);
+    }
+};
+
 namespace {
 
 using Microsoft::WRL::Callback;
@@ -42,16 +55,20 @@ void CloseClosable(IUnknown* unk)
 }
 
 struct CaptureCleanup {
-    std::shared_ptr<std::atomic<bool>> active;
+    std::shared_ptr<WindowCaptureSignal> signal;
     ComPtr<wgc::IDirect3D11CaptureFramePool> pool;
     ComPtr<wgc::IGraphicsCaptureSession> session;
     EventRegistrationToken token{};
     bool hasToken = false;
 
+    CaptureCleanup() = default;
+    CaptureCleanup(const CaptureCleanup&) = delete;
+    CaptureCleanup& operator=(const CaptureCleanup&) = delete;
+
     ~CaptureCleanup()
     {
-        if (active)
-            active->store(false, std::memory_order_release);
+        if (signal)
+            signal->active.store(false, std::memory_order_release);
         if (pool && hasToken)
             (void)pool->remove_FrameArrived(token);
         CloseClosable(session.Get());
@@ -100,10 +117,9 @@ bool ComputeWindowCrop(HWND window, int maxW, int maxH, int& x, int& y, int& w, 
 WindowFrameCapturer::~WindowFrameCapturer()
 {
     ResetDevice();
-    if (frameEvent_) {
-        CloseHandle(frameEvent_);
-        frameEvent_ = nullptr;
-    }
+    if (frameSignal_)
+        frameSignal_->active.store(false, std::memory_order_release);
+    frameSignal_.reset();
 }
 
 void WindowFrameCapturer::ResetDevice()
@@ -128,10 +144,12 @@ bool WindowFrameCapturer::CheckDeviceHr(HRESULT hr, HRESULT* hrOut)
 
 bool WindowFrameCapturer::EnsureDevice(HRESULT* hrOut)
 {
-    if (!frameEvent_) {
-        frameEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!frameEvent_)
+    if (!frameSignal_) {
+        auto sig = std::make_shared<WindowCaptureSignal>();
+        sig->event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!sig->event)
             return SetHr(HRESULT_FROM_WIN32(GetLastError()), hrOut);
+        frameSignal_ = std::move(sig);
     }
     if (d3dDevice_ && d3dContext_ && wgdDevice_)
         return true;
@@ -183,8 +201,11 @@ bool WindowFrameCapturer::ReadFrame(wgc::IDirect3D11CaptureFrame* frame, HWND wi
 {
     struct FrameCloser {
         IUnknown* unk;
+        explicit FrameCloser(IUnknown* u) : unk(u) {}
+        FrameCloser(const FrameCloser&) = delete;
+        FrameCloser& operator=(const FrameCloser&) = delete;
         ~FrameCloser() { CloseClosable(unk); }
-    } closer{frame};
+    } closer(frame);
 
     ComPtr<wgd::Direct3D11::IDirect3DSurface> surface;
     if (!CheckDeviceHr(frame->get_Surface(&surface), hrOut) || !surface)
@@ -263,11 +284,12 @@ bool WindowFrameCapturer::Capture(HWND window, HANDLE stopEvent, DWORD timeoutMs
     if (!CheckDeviceHr(hr, hrOut) || !cleanup.pool)
         return false;
 
-    cleanup.active = std::make_shared<std::atomic<bool>>(true);
+    frameSignal_->active.store(true, std::memory_order_release);
+    cleanup.signal = frameSignal_;
     auto handler = Callback<ABI::Windows::Foundation::ITypedEventHandler<wgc::Direct3D11CaptureFramePool*, IInspectable*>>(
-        [active = cleanup.active, event = frameEvent_](wgc::IDirect3D11CaptureFramePool*, IInspectable*) -> HRESULT {
-            if (active->load(std::memory_order_acquire))
-                SetEvent(event);
+        [sig = frameSignal_](wgc::IDirect3D11CaptureFramePool*, IInspectable*) -> HRESULT {
+            if (sig->active.load(std::memory_order_acquire) && sig->event)
+                SetEvent(sig->event);
             return S_OK;
         });
     if (!handler)
@@ -279,11 +301,11 @@ bool WindowFrameCapturer::Capture(HWND window, HANDLE stopEvent, DWORD timeoutMs
     if (!CheckDeviceHr(cleanup.pool->CreateCaptureSession(item.Get(), &cleanup.session), hrOut) || !cleanup.session)
         return false;
     ConfigureSession(cleanup.session.Get());
-    ResetEvent(frameEvent_);
+    ResetEvent(frameSignal_->event);
     if (!CheckDeviceHr(cleanup.session->StartCapture(), hrOut))
         return false;
 
-    HANDLE handles[2] = {frameEvent_, stopEvent};
+    HANDLE handles[2] = {frameSignal_->event, stopEvent};
     const DWORD wait = WaitForMultipleObjects(stopEvent ? 2 : 1, handles, FALSE, timeoutMs);
     if (wait != WAIT_OBJECT_0 || (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0))
         return SetHr(wait == WAIT_TIMEOUT ? HRESULT_FROM_WIN32(ERROR_TIMEOUT) : E_ABORT, hrOut);

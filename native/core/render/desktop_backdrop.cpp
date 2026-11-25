@@ -238,7 +238,7 @@ void DesktopBackdrop::Update(const std::wstring& mode)
         StartWallpaper();
     if (mode_ == L"desktop") {
         CheckCaptureTarget();
-        if (session_ && ((closedState_ && closedState_->closed.load(std::memory_order_acquire)) || !IsWindow(desktop_))) {
+        if (session_ && (CaptureClosed() || !IsWindow(desktop_))) {
             Log(L"render: the desktop window went away; capturing it again soon");
             StopCapture();
             retryMs_ = ClockMs() + kRetryMs;

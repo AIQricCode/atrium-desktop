@@ -7,13 +7,16 @@
 #include <wrl/client.h>
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
-namespace ABI::Windows::Graphics::Capture {
+namespace ABI::Windows::Graphics::Capture { // NOLINT(readability-identifier-naming): Windows SDK ABI namespace
 struct IDirect3D11CaptureFrame;
 }
 
 namespace atrium {
+
+struct WindowCaptureSignal;
 
 struct CapturedWindowFrame {
     int width = 0;
@@ -46,7 +49,7 @@ private:
     int stagingW_ = 0;
     int stagingH_ = 0;
     DXGI_FORMAT stagingFormat_ = DXGI_FORMAT_UNKNOWN;
-    HANDLE frameEvent_ = nullptr;
+    std::shared_ptr<WindowCaptureSignal> frameSignal_;
 };
 
 } // namespace atrium

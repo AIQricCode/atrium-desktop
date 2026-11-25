@@ -51,6 +51,7 @@ public:
     bool ChangedSince(unsigned version, const RECT& area) const;
 
 private:
+    bool CaptureClosed() const { return closedState_ && closedState_->closed.load(std::memory_order_acquire); }
     void CheckCaptureTarget();
     bool StartCapture(); // adopts a started capture (see Starting); false while none
     void StopCapture();

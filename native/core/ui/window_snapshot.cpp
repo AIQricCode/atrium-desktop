@@ -104,8 +104,8 @@ WindowPicture BuildWindowPictureFromBgra(const uint8_t* src, int sw, int sh, int
                 const size_t idx = size_t(tx) * 3;
                 writePixel(tx, ty, uint8_t(rowSum[idx] / n), uint8_t(rowSum[idx + 1] / n), uint8_t(rowSum[idx + 2] / n));
             }
-            std::fill(rowSum.begin(), rowSum.end(), 0);
-            std::fill(rowCount.begin(), rowCount.end(), 0);
+            std::ranges::fill(rowSum, 0);
+            std::ranges::fill(rowCount, 0);
         };
         int curTy = 0;
         for (int y = 0; y < sh; ++y) {
@@ -388,7 +388,7 @@ void WindowSnapshots::RequestShrink(HWND window, unsigned gen, std::shared_ptr<c
     if (stop_ || !notify_)
         return;
     ShrinkJob job{window, gen, std::move(large), largeMax};
-    auto it = std::find_if(shrinkQueue_.begin(), shrinkQueue_.end(), [window](const ShrinkJob& j) { return j.window == window; });
+    auto it = std::ranges::find_if(shrinkQueue_, [window](const ShrinkJob& j) { return j.window == window; });
     if (it != shrinkQueue_.end())
         *it = std::move(job);
     else

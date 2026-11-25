@@ -524,7 +524,7 @@ void TrayHost::KeepFirst()
             first = FindWindowW(L"Shell_TrayWnd", nullptr);
         }
     } else if (first == w) {
-        if (yieldPolicy_.OnFirst()) {
+        if (yieldPolicy_.OnFirst() || wasYieldedBefore) {
             yielded_ = false, dirty_ = true;
             Log(L"tray host: in front again");
             SetTimer(w, kRecollectTimer, 200, nullptr); // updates went past the host meanwhile
@@ -535,7 +535,7 @@ void TrayHost::KeepFirst()
             Log(L"tray host: another program's tray (pid %lu) is in front: left there", owner);
         }
     } else {
-        HandleExplorerFront(w, GetTickCount64(), yielded_.load());
+        HandleExplorerFront(w, GetTickCount64(), wasYieldedBefore);
     }
     FinishKeepFirst(first, shell, shellPid, wasYieldedBefore);
 }

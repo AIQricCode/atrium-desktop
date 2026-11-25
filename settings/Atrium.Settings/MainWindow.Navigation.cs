@@ -52,7 +52,7 @@ public sealed partial class MainWindow
         UpdateHero();
         UpdateCustomSwatch();
         if (_page == 3) ShowNotifyPreview(false);
-        if (fromLoad && _page == 4) ShowWidgetMap();
+        if (fromLoad && _page == 4) { ShowWidgetMap(); RefreshGallery(); }
         if (_page == 5)
         {
             if (fromLoad) ShowStagePreview(false);

@@ -142,20 +142,41 @@ void StageManager::PruneRestoring(ULONGLONG now)
     });
 }
 
+void StageManager::ApplyShrinkResult(const WindowSnapshots::Result& r)
+{
+    auto it = pictures_.find(r.window);
+    if (it == pictures_.end())
+        return;
+    if (it->second.gen == r.shrinkGen && r.large.ok && !Flying(r.window)) {
+        it->second.large = std::make_shared<const WindowPicture>(r.large);
+        it->second.shrinkingGen = 0;
+        flight_.ForgetImage(L"stage|w|" + std::to_wstring(reinterpret_cast<uintptr_t>(r.window)) + L"|" + std::to_wstring(it->second.gen) + L"|L");
+    } else if (it->second.shrinkingGen == r.shrinkGen) {
+        it->second.shrinkingGen = 0;
+    }
+}
+
+void StageManager::ScheduleOldLargeShrinks()
+{
+    std::vector<std::pair<ULONGLONG, HWND>> full;
+    for (const auto& [h, q] : pictures_)
+        if (q.large && std::max(q.large->width, q.large->height) > kLargeOld)
+            full.emplace_back(q.taken, h);
+    std::ranges::sort(full, std::greater<>());
+    for (size_t i = kLargeKept; i < full.size(); ++i) {
+        Picture& q = pictures_[full[i].second];
+        if (q.large && q.shrinkingGen != q.gen && !Flying(full[i].second)) {
+            q.shrinkingGen = q.gen;
+            snapshots_.RequestShrink(full[i].second, q.gen, q.large, kLargeOld);
+        }
+    }
+}
+
 void StageManager::PictureTaken()
 {
     for (WindowSnapshots::Result& r : snapshots_.Take()) {
         if (r.shrinkGen != 0) {
-            auto it = pictures_.find(r.window);
-            if (it != pictures_.end()) {
-                if (it->second.gen == r.shrinkGen && r.large.ok && !Flying(r.window)) {
-                    it->second.large = std::make_shared<const WindowPicture>(std::move(r.large));
-                    it->second.shrinkingGen = 0;
-                    flight_.ForgetImage(L"stage|w|" + std::to_wstring(reinterpret_cast<uintptr_t>(r.window)) + L"|" + std::to_wstring(it->second.gen) + L"|L");
-                } else if (it->second.shrinkingGen == r.shrinkGen) {
-                    it->second.shrinkingGen = 0;
-                }
-            }
+            ApplyShrinkResult(r);
             continue;
         }
         if (!enabled_ || !IsWindow(r.window))
@@ -163,33 +184,7 @@ void StageManager::PictureTaken()
         if (parked_.contains(r.window))
             Log(L"stage: picture of %p %s", r.window,
                 r.picture.ok ? (std::to_wstring(r.picture.width) + L"x" + std::to_wstring(r.picture.height)).c_str() : L"(none)");
-        if (r.picture.ok) {
-            Picture& p = pictures_[r.window];
-            if (p.gen)
-                ForgetImages(L"stage|w|" + std::to_wstring(reinterpret_cast<uintptr_t>(r.window)) + L"|" + std::to_wstring(p.gen), true);
-            p.picture = std::make_shared<const WindowPicture>(std::move(r.picture));
-            p.large = r.large.ok ? std::make_shared<const WindowPicture>(std::move(r.large)) : nullptr;
-            p.gen = ++pictureGen_;
-            p.shrinkingGen = 0;
-            p.taken = GetTickCount64();
-            p.misses = 0;
-            if (minimizeToStrip_ && enabled_ && up_.contains(r.window))
-                SetTransitions(r.window, false);
-            // Beyond the most recent few, full-size pictures are kept smaller.
-            std::vector<std::pair<ULONGLONG, HWND>> full;
-            for (const auto& [h, q] : pictures_)
-                if (q.large && std::max(q.large->width, q.large->height) > kLargeOld)
-                    full.emplace_back(q.taken, h);
-            std::ranges::sort(full, std::greater<>());
-            for (size_t i = kLargeKept; i < full.size(); ++i) {
-                Picture& q = pictures_[full[i].second];
-                if (q.large && q.shrinkingGen != q.gen && !Flying(full[i].second)) {
-                    q.shrinkingGen = q.gen;
-                    snapshots_.RequestShrink(full[i].second, q.gen, q.large, kLargeOld);
-                }
-            }
-            PutDown(r.window, true);
-        } else {
+        if (!r.picture.ok) {
             // None taken (or a blank one): an earlier picture flies, if there is one; otherwise back off retries.
             auto old = pictures_.find(r.window);
             const bool hadPicture = old != pictures_.end() && old->second.picture && old->second.picture->ok;
@@ -199,7 +194,21 @@ void StageManager::PictureTaken()
                 p.taken = GetTickCount64();
             }
             PutDown(r.window, hadPicture);
+            continue;
         }
+        Picture& p = pictures_[r.window];
+        if (p.gen)
+            ForgetImages(L"stage|w|" + std::to_wstring(reinterpret_cast<uintptr_t>(r.window)) + L"|" + std::to_wstring(p.gen), true);
+        p.picture = std::make_shared<const WindowPicture>(std::move(r.picture));
+        p.large = r.large.ok ? std::make_shared<const WindowPicture>(std::move(r.large)) : nullptr;
+        p.gen = ++pictureGen_;
+        p.shrinkingGen = 0;
+        p.taken = GetTickCount64();
+        p.misses = 0;
+        if (minimizeToStrip_ && enabled_ && up_.contains(r.window))
+            SetTransitions(r.window, false);
+        ScheduleOldLargeShrinks();
+        PutDown(r.window, true);
     }
     surface_.Invalidate();
 }

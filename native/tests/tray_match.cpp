@@ -34,7 +34,8 @@ void TestMojibakeAndKnownShell()
     Check(sec && sec->iconDll == nullptr && sec->aliases.size() == 2 && sec->aliases[0] == L"Windows 安全中心" && sec->aliases[1] == L"Windows Security",
           "known windows security shell tray");
     const auto secLower = KnownShellTray(L"guid:{ba82e2dc-f405-47ad-b032-cf0faa0e3933}");
-    Check(secLower && secLower->iconDll == nullptr && secLower->aliases == sec->aliases, "known windows security lowercase guid");
+    Check(secLower.has_value() && sec.has_value() && secLower->iconDll == nullptr && secLower->aliases == sec->aliases,
+          "known windows security lowercase guid");
     Check(!KnownShellTray(L"{00000000-0000-0000-0000-000000000000}"), "unknown guid returns nullopt");
 
     for (const std::wstring& clean : {std::wstring(L"蓝牙设备"), std::wstring(L"安全删除硬件并弹出媒体"), std::wstring(L"模式"),

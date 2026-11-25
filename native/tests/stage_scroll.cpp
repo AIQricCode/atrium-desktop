@@ -81,6 +81,84 @@ void CheckFade()
     Require(alpha(down, -pad) == 0, "nothing reaches the margin's far edge");
 }
 
+void CheckStageScrollAndMerge()
+{
+    auto require = Require;
+    StageScroll scroll;
+    require(!scroll.Wheel(-120, false, 0) && scroll.Offset() == 0, "empty strip does not scroll");
+    require(!scroll.Wheel(-120, false, 1), "one group does not scroll");
+    require(scroll.Wheel(-120, false, 10) && scroll.Offset() == 1, "wheel down advances beyond the visible page");
+    require(scroll.Index(5, 10) == 6, "viewport indexes the entire list, not just six cards");
+    require(scroll.Wheel(240, false, 10) && scroll.Offset() == 9, "wheel up wraps past the start");
+    require(scroll.Index(1, 10) == 0, "viewport wraps at the end");
+    scroll.Reset();
+    for (int i = 0; i < 3; ++i)
+        require(!scroll.Wheel(-30, false, 8), "partial notches must accumulate");
+    require(scroll.Wheel(-30, false, 8) && scroll.Offset() == 1, "four precision deltas equal one notch");
+    require(!scroll.Wheel(30, false, 8), "opposite partial delta waits");
+    require(!scroll.Wheel(-30, false, 8), "reversing partial input cancels its remainder");
+    require(scroll.Wheel(120, true, 8) && scroll.Offset() == 2, "horizontal right advances");
+    require(scroll.Wheel(-360, true, 8) && scroll.Offset() == 7, "horizontal left wraps");
+    scroll.Fit(3);
+    require(scroll.Offset() == 1, "shrinking list normalizes offset");
+    scroll.Anchor(2, 3);
+    require(scroll.Index(0, 3) == 2, "rebuild preserves the first visible identity");
+    scroll.Reset();
+    require(scroll.Offset() == 0 && !scroll.Wheel(-90, false, 3), "reset clears both offset and fractional input");
+    require(scroll.Wheel(-32760, false, 8) && scroll.Offset() < 8, "large wheel input stays bounded");
+    scroll.Fit(0);
+    require(scroll.Offset() == 0 && scroll.Index(4, 0) == 0, "empty rebuild is safe");
+
+    // Non-wrapping strip scrolling (wrap = false).
+    require(scroll.Wrap(), "StageScroll wraps by default");
+    scroll.SetWrap(false);
+    require(!scroll.Wrap(), "SetWrap(false) disables cyclic wraparound");
+    require(!scroll.Wheel(-120, false, 4, 4) && scroll.Offset() == 0, "strip fitting within capacity does not scroll");
+    require(!scroll.Wheel(120, false, 2, 4) && scroll.Offset() == 0, "fewer cards than capacity never scroll");
+    require(!scroll.Wheel(120, false, 6, 4) && scroll.Offset() == 0, "wheel up at start stops at 0");
+    require(scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 1, "wheel down advances when count exceeds capacity");
+    require(scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 2, "wheel down reaches count - capacity");
+    require(!scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 2, "wheel down at end stops at count - capacity");
+    require(!scroll.Wheel(120, true, 6, 4) && scroll.Offset() == 2, "horizontal right at end stops at count - capacity");
+    require(scroll.Wheel(-120, true, 6, 4) && scroll.Offset() == 1, "horizontal left moves back from end");
+    require(scroll.Wheel(-120, true, 6, 4) && scroll.Offset() == 0, "horizontal left reaches 0");
+    require(!scroll.Wheel(-120, true, 6, 4) && scroll.Offset() == 0, "horizontal left at start stops at 0");
+
+    // Boundary remainder clears so reversing responds on the next notch.
+    require(!scroll.Wheel(60, false, 6, 4) && scroll.Offset() == 0, "partial upward overflow at start is clamped");
+    require(scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 1, "single downward notch responds immediately after start overflow");
+    require(scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 2, "reaches end before end-overflow check");
+    require(!scroll.Wheel(-60, false, 6, 4) && scroll.Offset() == 2, "partial downward overflow at end is clamped");
+    require(scroll.Wheel(120, false, 6, 4) && scroll.Offset() == 1, "single upward notch responds immediately after end overflow");
+    scroll.Reset();
+    require(!scroll.Wheel(-60, false, 6, 4) && scroll.Offset() == 0, "partial downward delta away from start waits");
+    require(scroll.Wheel(-60, false, 6, 4) && scroll.Offset() == 1, "second partial downward delta away from start completes notch");
+    scroll.Reset();
+    require(!scroll.Wheel(-60, true, 6, 4) && scroll.Offset() == 0, "partial horizontal left overflow at start is clamped");
+    require(scroll.Wheel(120, true, 6, 4) && scroll.Offset() == 1, "single horizontal right notch responds immediately");
+    scroll.Reset();
+    require(scroll.Wheel(120, true, 5, 4) && scroll.Offset() == 1, "horizontal right reaches end (5 - 4 = 1)");
+    require(!scroll.Wheel(60, true, 5, 4) && scroll.Offset() == 1, "partial horizontal right overflow at end is clamped");
+    require(scroll.Wheel(-120, true, 5, 4) && scroll.Offset() == 0, "single horizontal left notch responds immediately after end overflow");
+
+    // Fit and Anchor clamp when wrap = false, and SetWrap(true -> false) clamps overflow.
+    scroll.Anchor(5, 6, 4);
+    require(scroll.Offset() == 2, "Anchor clamps to count - capacity when wrap is off");
+    scroll.Fit(5, 4);
+    require(scroll.Offset() == 1, "Fit clamps when count shrinks");
+    scroll.Fit(5, 6);
+    require(scroll.Offset() == 0, "Fit clamps to 0 when capacity grows past count");
+    scroll.Anchor(2, 0, 4);
+    require(scroll.Offset() == 0, "Anchor resets to 0 on empty strip");
+    scroll.SetWrap(true);
+    scroll.Anchor(5, 6, 4);
+    require(scroll.Offset() == 5, "Anchor allows offset past count - capacity while wrap is on");
+    scroll.SetWrap(false);
+    scroll.Fit(6, 4);
+    require(scroll.Offset() == 2, "SetWrap(false) followed by Fit clamps prior cyclic offset");
+    CheckMerge();
+}
+
 int main()
 {
     try {
@@ -94,79 +172,7 @@ int main()
         intent.Arm(L"editor", 20000);
         intent.Cancel();
         require(!intent.Matches(L"editor", 20001), "disable or stage switching cancels a launch intent");
-        StageScroll scroll;
-        require(!scroll.Wheel(-120, false, 0) && scroll.Offset() == 0, "empty strip does not scroll");
-        require(!scroll.Wheel(-120, false, 1), "one group does not scroll");
-        require(scroll.Wheel(-120, false, 10) && scroll.Offset() == 1, "wheel down advances beyond the visible page");
-        require(scroll.Index(5, 10) == 6, "viewport indexes the entire list, not just six cards");
-        require(scroll.Wheel(240, false, 10) && scroll.Offset() == 9, "wheel up wraps past the start");
-        require(scroll.Index(1, 10) == 0, "viewport wraps at the end");
-        scroll.Reset();
-        for (int i = 0; i < 3; ++i)
-            require(!scroll.Wheel(-30, false, 8), "partial notches must accumulate");
-        require(scroll.Wheel(-30, false, 8) && scroll.Offset() == 1, "four precision deltas equal one notch");
-        require(!scroll.Wheel(30, false, 8), "opposite partial delta waits");
-        require(!scroll.Wheel(-30, false, 8), "reversing partial input cancels its remainder");
-        require(scroll.Wheel(120, true, 8) && scroll.Offset() == 2, "horizontal right advances");
-        require(scroll.Wheel(-360, true, 8) && scroll.Offset() == 7, "horizontal left wraps");
-        scroll.Fit(3);
-        require(scroll.Offset() == 1, "shrinking list normalizes offset");
-        scroll.Anchor(2, 3);
-        require(scroll.Index(0, 3) == 2, "rebuild preserves the first visible identity");
-        scroll.Reset();
-        require(scroll.Offset() == 0 && !scroll.Wheel(-90, false, 3), "reset clears both offset and fractional input");
-        require(scroll.Wheel(-32760, false, 8) && scroll.Offset() < 8, "large wheel input stays bounded");
-        scroll.Fit(0);
-        require(scroll.Offset() == 0 && scroll.Index(4, 0) == 0, "empty rebuild is safe");
-
-        // Non-wrapping strip scrolling (wrap = false).
-        require(scroll.Wrap(), "StageScroll wraps by default");
-        scroll.SetWrap(false);
-        require(!scroll.Wrap(), "SetWrap(false) disables cyclic wraparound");
-        require(!scroll.Wheel(-120, false, 4, 4) && scroll.Offset() == 0, "strip fitting within capacity does not scroll");
-        require(!scroll.Wheel(120, false, 2, 4) && scroll.Offset() == 0, "fewer cards than capacity never scroll");
-        require(!scroll.Wheel(120, false, 6, 4) && scroll.Offset() == 0, "wheel up at start stops at 0");
-        require(scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 1, "wheel down advances when count exceeds capacity");
-        require(scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 2, "wheel down reaches count - capacity");
-        require(!scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 2, "wheel down at end stops at count - capacity");
-        require(!scroll.Wheel(120, true, 6, 4) && scroll.Offset() == 2, "horizontal right at end stops at count - capacity");
-        require(scroll.Wheel(-120, true, 6, 4) && scroll.Offset() == 1, "horizontal left moves back from end");
-        require(scroll.Wheel(-120, true, 6, 4) && scroll.Offset() == 0, "horizontal left reaches 0");
-        require(!scroll.Wheel(-120, true, 6, 4) && scroll.Offset() == 0, "horizontal left at start stops at 0");
-
-        // Boundary remainder clears so reversing responds on the next notch.
-        require(!scroll.Wheel(60, false, 6, 4) && scroll.Offset() == 0, "partial upward overflow at start is clamped");
-        require(scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 1, "single downward notch responds immediately after start overflow");
-        require(scroll.Wheel(-120, false, 6, 4) && scroll.Offset() == 2, "reaches end before end-overflow check");
-        require(!scroll.Wheel(-60, false, 6, 4) && scroll.Offset() == 2, "partial downward overflow at end is clamped");
-        require(scroll.Wheel(120, false, 6, 4) && scroll.Offset() == 1, "single upward notch responds immediately after end overflow");
-        scroll.Reset();
-        require(!scroll.Wheel(-60, false, 6, 4) && scroll.Offset() == 0, "partial downward delta away from start waits");
-        require(scroll.Wheel(-60, false, 6, 4) && scroll.Offset() == 1, "second partial downward delta away from start completes notch");
-        scroll.Reset();
-        require(!scroll.Wheel(-60, true, 6, 4) && scroll.Offset() == 0, "partial horizontal left overflow at start is clamped");
-        require(scroll.Wheel(120, true, 6, 4) && scroll.Offset() == 1, "single horizontal right notch responds immediately");
-        scroll.Reset();
-        require(scroll.Wheel(120, true, 5, 4) && scroll.Offset() == 1, "horizontal right reaches end (5 - 4 = 1)");
-        require(!scroll.Wheel(60, true, 5, 4) && scroll.Offset() == 1, "partial horizontal right overflow at end is clamped");
-        require(scroll.Wheel(-120, true, 5, 4) && scroll.Offset() == 0, "single horizontal left notch responds immediately after end overflow");
-
-        // Fit and Anchor clamp when wrap = false, and SetWrap(true -> false) clamps overflow.
-        scroll.Anchor(5, 6, 4);
-        require(scroll.Offset() == 2, "Anchor clamps to count - capacity when wrap is off");
-        scroll.Fit(5, 4);
-        require(scroll.Offset() == 1, "Fit clamps when count shrinks");
-        scroll.Fit(5, 6);
-        require(scroll.Offset() == 0, "Fit clamps to 0 when capacity grows past count");
-        scroll.Anchor(2, 0, 4);
-        require(scroll.Offset() == 0, "Anchor resets to 0 on empty strip");
-        scroll.SetWrap(true);
-        scroll.Anchor(5, 6, 4);
-        require(scroll.Offset() == 5, "Anchor allows offset past count - capacity while wrap is on");
-        scroll.SetWrap(false);
-        scroll.Fit(6, 4);
-        require(scroll.Offset() == 2, "SetWrap(false) followed by Fit clamps prior cyclic offset");
-        CheckMerge();
+        CheckStageScrollAndMerge();
 
         // Park predicate: disabled windows (e.g. blocked by a modal dialog) stay where they are.
         require(ShouldParkStageWindow(false, true, false, true, false, false, true), "enabled non-transient window on monitor parks");

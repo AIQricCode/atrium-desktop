@@ -523,15 +523,11 @@ void ApplyDesktopAndSystemSettings(const Settings& s)
     const HMONITOR desktop = ResolveDisplay(ConnectedDisplays(), s.desktopDisplay);
     g_app.widgets->SetMonitor(desktop);
     g_app.widgets->SetOnRight(s.stageManager ? !s.stageOnRight : s.widgetsOnRight);
-    g_app.stage->SetMonitor(desktop);
-    g_app.stage->SetOnRight(s.stageOnRight);
-    g_app.stage->SetAutoHide(s.stageAutoHide);
-    g_app.stage->SetMinimizeToStrip(s.stageMinimize);
-    g_app.stage->SetDragMerge(s.stageDragMerge);
+    g_app.stage->SetMonitor(desktop), g_app.stage->SetOnRight(s.stageOnRight), g_app.stage->SetAutoHide(s.stageAutoHide);
+    g_app.stage->SetMinimizeToStrip(s.stageMinimize), g_app.stage->SetDragMerge(s.stageDragMerge);
     g_app.stage->SetExcluded(s.stageExcluded), SetUserGames(s.stageExcluded);
     g_app.stage->SetCloseButton(s.stageCloseButton), g_app.stage->SetScrollWrap(s.stageScrollWrap);
-    g_app.stage->SetAvoid(s.stageAvoid);
-    g_app.stage->SetEnabled(s.stageManager);
+    g_app.stage->SetAvoid(s.stageAvoid), g_app.stage->SetEnabled(s.stageManager);
     g_app.genie->SetEnabled(s.genieMinimize && s.bar);
     g_app.preview->SetPeek(s.windowPeek);
     g_app.control->SetStage(s.stageManager, s.stageOnRight);
@@ -1038,6 +1034,14 @@ void HandleTaskbarCreated()
     if (g_app.widgets)
         g_app.widgets->OnShellRestart();
 }
+void HandleCatalogMessage(bool listChanged)
+{
+    if (g_app.start)
+        g_app.start->Refresh(listChanged);
+    if (g_app.extras)
+        g_app.extras->OnCatalogChanged(listChanged);
+}
+
 LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (g_app.tasks && g_app.tasks->HandleMessage(m, w, l))
@@ -1068,10 +1072,7 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
             ForBars([&](Bar& bar) { bar.SetItems(items); });
         }
         return 0;
-    case WM_CATALOG:
-        if (g_app.start && g_app.extras)
-            g_app.start->Refresh(w == 0), g_app.extras->OnCatalogChanged(w == 0);
-        return 0;
+    case WM_CATALOG: HandleCatalogMessage(w == 0); return 0;
     case WM_VOLUME: UpdateStatus(); return 0;
     case WM_STATUS: {
         auto status = TakePosted<SystemStatus>(l);
