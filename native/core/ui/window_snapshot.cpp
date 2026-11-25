@@ -378,6 +378,23 @@ void WindowSnapshots::Request(HWND window, int maxWidth, int maxHeight, float ra
     cv_.notify_one();
 }
 
+void WindowSnapshots::RequestShrink(HWND window, unsigned gen, std::shared_ptr<const WindowPicture> large, int largeMax)
+{
+    if (!window || gen == 0 || !large || !large->ok || largeMax <= 0)
+        return;
+    std::unique_lock lk(lock_);
+    if (stop_ || !notify_)
+        return;
+    ShrinkJob job{window, gen, std::move(large), largeMax};
+    auto it = std::find_if(shrinkQueue_.begin(), shrinkQueue_.end(), [window](const ShrinkJob& j) { return j.window == window; });
+    if (it != shrinkQueue_.end())
+        *it = std::move(job);
+    else
+        shrinkQueue_.push_back(std::move(job));
+    lk.unlock();
+    cv_.notify_one();
+}
+
 void WindowSnapshots::Worker()
 {
     // Physical px of every monitor, as the window's own picture is.
@@ -387,21 +404,38 @@ void WindowSnapshots::Worker()
     WindowFrameCapturer capturer;
     for (;;) {
         Job job{};
+        ShrinkJob sjob{};
+        bool isCapture = false;
         {
             std::unique_lock lk(lock_);
-            cv_.wait(lk, [this] { return stop_ || !queue_.empty(); });
+            cv_.wait(lk, [this] { return stop_ || !queue_.empty() || !shrinkQueue_.empty(); });
             if (stop_)
                 break;
-            job = queue_.front();
-            queue_.pop_front();
+            if (!queue_.empty()) {
+                isCapture = true;
+                job = queue_.front();
+                queue_.pop_front();
+            } else {
+                sjob = std::move(shrinkQueue_.front());
+                shrinkQueue_.pop_front();
+            }
         }
-        WindowPicture large, p = Capture(job.window, job.maxWidth, job.maxHeight, job.radius, job.largeMax, &large, loggedFailures, capturer, stopEvent_);
-        std::lock_guard g(lock_);
-        pending_.erase(job.window);
-        if (stop_ || !notify_)
-            break;
-        done_.push_back(Result{job.window, std::move(p), std::move(large)});
-        PostMessageW(notify_, message_, 0, 0);
+        if (isCapture) {
+            WindowPicture large, p = Capture(job.window, job.maxWidth, job.maxHeight, job.radius, job.largeMax, &large, loggedFailures, capturer, stopEvent_);
+            std::lock_guard g(lock_);
+            pending_.erase(job.window);
+            if (stop_ || !notify_)
+                break;
+            done_.push_back(Result{job.window, std::move(p), std::move(large)});
+            PostMessageW(notify_, message_, 0, 0);
+        } else {
+            WindowPicture shrunk = Smaller(*sjob.large, sjob.largeMax);
+            std::lock_guard g(lock_);
+            if (stop_ || !notify_)
+                break;
+            done_.push_back(Result{sjob.window, {}, std::move(shrunk), sjob.gen});
+            PostMessageW(notify_, message_, 0, 0);
+        }
     }
     if (SUCCEEDED(roHr))
         RoUninitialize();

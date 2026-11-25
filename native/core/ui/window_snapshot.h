@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -54,10 +55,13 @@ public:
     // Pictures `window` at most maxWidth x maxHeight px, corners of `radius` px; with largeMax, also
     // a large one (at most largeMax px either way, the window's own corners, no shadow).
     void Request(HWND window, int maxWidth, int maxHeight, float radius, int largeMax = 0, bool urgent = false);
+    // Downsamples an existing `large` snapshot on the worker thread, announcing completion with `shrinkGen == gen`.
+    void RequestShrink(HWND window, unsigned gen, std::shared_ptr<const WindowPicture> large, int largeMax);
     struct Result {
         HWND window;
         WindowPicture picture;
         WindowPicture large; // ok only if asked for and taken
+        unsigned shrinkGen = 0;
     };
     std::vector<Result> Take();
 
@@ -67,12 +71,19 @@ private:
         int maxWidth, maxHeight, largeMax;
         float radius;
     };
+    struct ShrinkJob {
+        HWND window = nullptr;
+        unsigned gen = 0;
+        std::shared_ptr<const WindowPicture> large;
+        int largeMax = 0;
+    };
     void Worker();
 
     std::mutex lock_;
     std::condition_variable cv_;
     std::deque<Job> queue_;
-    std::unordered_set<HWND> pending_; // queued or in-flight: at most one entry per window
+    std::deque<ShrinkJob> shrinkQueue_;
+    std::unordered_set<HWND> pending_; // queued or in-flight capture jobs: at most one entry per window
     std::vector<Result> done_;
     HWND notify_ = nullptr;
     UINT message_ = 0;

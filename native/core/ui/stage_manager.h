@@ -103,9 +103,10 @@ private:
     struct Picture {
         std::shared_ptr<const WindowPicture> picture;
         std::shared_ptr<const WindowPicture> large; // near the window's size, its own corners (flights)
-        unsigned gen = 0; // its images' cache keys change with it
-        ULONGLONG taken = 0; // when it was taken (or asked for)
-        int misses = 0;      // consecutive failed/blank captures before a picture exists
+        unsigned gen = 0;          // its images' cache keys change with it
+        unsigned shrinkingGen = 0; // gen currently queued/running for background downsampling
+        ULONGLONG taken = 0;       // when it was taken (or asked for)
+        int misses = 0;            // consecutive failed/blank captures before a picture exists
     };
     struct Placeholder {
         std::shared_ptr<const WindowPicture> picture;

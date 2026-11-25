@@ -601,6 +601,19 @@ void StageManager::PutDown(HWND window, bool fly)
 void StageManager::PictureTaken()
 {
     for (WindowSnapshots::Result& r : snapshots_.Take()) {
+        if (r.shrinkGen != 0) {
+            auto it = pictures_.find(r.window);
+            if (it != pictures_.end()) {
+                if (it->second.gen == r.shrinkGen && r.large.ok && !Flying(r.window)) {
+                    it->second.large = std::make_shared<const WindowPicture>(std::move(r.large));
+                    it->second.shrinkingGen = 0;
+                    flight_.ForgetImage(L"stage|w|" + std::to_wstring(reinterpret_cast<uintptr_t>(r.window)) + L"|" + std::to_wstring(it->second.gen) + L"|L");
+                } else if (it->second.shrinkingGen == r.shrinkGen) {
+                    it->second.shrinkingGen = 0;
+                }
+            }
+            continue;
+        }
         if (!enabled_ || !IsWindow(r.window))
             continue;
         if (parked_.contains(r.window))
@@ -613,6 +626,7 @@ void StageManager::PictureTaken()
             p.picture = std::make_shared<const WindowPicture>(std::move(r.picture));
             p.large = r.large.ok ? std::make_shared<const WindowPicture>(std::move(r.large)) : nullptr;
             p.gen = ++pictureGen_;
+            p.shrinkingGen = 0;
             p.taken = GetTickCount64();
             p.misses = 0;
             if (minimizeToStrip_ && enabled_ && up_.contains(r.window))
@@ -625,8 +639,10 @@ void StageManager::PictureTaken()
             std::ranges::sort(full, std::greater<>());
             for (size_t i = kLargeKept; i < full.size(); ++i) {
                 Picture& q = pictures_[full[i].second];
-                q.large = std::make_shared<const WindowPicture>(Smaller(*q.large, kLargeOld));
-                flight_.ForgetImage(L"stage|w|" + std::to_wstring(reinterpret_cast<uintptr_t>(full[i].second)) + L"|" + std::to_wstring(q.gen) + L"|L");
+                if (q.large && q.shrinkingGen != q.gen && !Flying(full[i].second)) {
+                    q.shrinkingGen = q.gen;
+                    snapshots_.RequestShrink(full[i].second, q.gen, q.large, kLargeOld);
+                }
             }
             PutDown(r.window, true);
         } else {

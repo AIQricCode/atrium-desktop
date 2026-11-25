@@ -1,10 +1,13 @@
 // Verifies BuildWindowPictureFromBgra and Smaller match the legacy Shrink+Finish algorithm byte-for-byte.
 #include "ui/window_snapshot.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 namespace {
@@ -126,6 +129,85 @@ bool CheckMatch(const WindowPicture& actual, const WindowPicture& ref, const cha
     return true;
 }
 
+std::vector<atrium::WindowSnapshots::Result> WaitForSnapshotBatch(atrium::WindowSnapshots& snapshots, HWND notify, UINT msgId, DWORD timeoutMs)
+{
+    const ULONGLONG deadline = GetTickCount64() + timeoutMs;
+    for (;;) {
+        MSG msg{};
+        while (PeekMessageW(&msg, notify, msgId, msgId, PM_REMOVE)) {}
+        auto batch = snapshots.Take();
+        if (!batch.empty())
+            return batch;
+        const ULONGLONG now = GetTickCount64();
+        if (now >= deadline)
+            return {};
+        const DWORD waitMs = static_cast<DWORD>(std::min<ULONGLONG>(50, deadline - now));
+        MsgWaitForMultipleObjectsEx(0, nullptr, waitMs, QS_POSTMESSAGE | QS_ALLPOSTMESSAGE, 0);
+    }
+}
+
+bool TestAsyncRequestShrink()
+{
+    constexpr UINT kMsg = WM_APP + 77;
+    HWND notify = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!Check(notify != nullptr, "CreateWindowExW message-only window failed"))
+        return false;
+
+    bool ok = true;
+    {
+        atrium::WindowSnapshots snapshots(notify, kMsg);
+        constexpr int sw = 200, sh = 120, stride = sw * 4;
+        const auto src = MakePatternBgra(sw, sh, stride);
+        auto large = std::make_shared<WindowPicture>(BuildWindowPictureFromBgra(src.data(), sw, sh, stride, sw, sh, 12.f, false));
+        large->corner = 12.f;
+
+        snapshots.RequestShrink(notify, 7, large, 100);
+        const auto firstBatch = WaitForSnapshotBatch(snapshots, notify, kMsg, 2000);
+        ok = ok && Check(firstBatch.size() == 1, "RequestShrink single result count");
+        if (firstBatch.size() == 1) {
+            const auto& r = firstBatch[0];
+            ok = ok && Check(r.window == notify, "RequestShrink window mismatch");
+            ok = ok && Check(r.shrinkGen == 7, "RequestShrink shrinkGen mismatch");
+            ok = ok && Check(!r.picture.ok, "RequestShrink picture.ok should be false");
+            ok = ok && Check(r.large.ok && r.large.width == 100 && r.large.height == 60, "RequestShrink shrunk dimensions mismatch");
+            ok = ok && Check(std::max(r.large.width, r.large.height) == 100, "RequestShrink max dimension mismatch");
+        }
+
+        // Verify two RequestShrink calls coalesce (or preserve valid shrinkGen) and never suppress Request() on the same HWND.
+        snapshots.RequestShrink(notify, 11, large, 100);
+        snapshots.RequestShrink(notify, 12, large, 100);
+        snapshots.Request(notify, 64, 48, 4.f, 0, true);
+
+        bool sawCapture = false;
+        unsigned lastShrinkGen = 0;
+        int shrinkCount = 0;
+        const ULONGLONG deadline = GetTickCount64() + 2000;
+        while ((!sawCapture || lastShrinkGen != 12) && GetTickCount64() < deadline) {
+            const ULONGLONG now = GetTickCount64();
+            const DWORD remaining = now < deadline ? static_cast<DWORD>(deadline - now) : 0;
+            const auto batch = WaitForSnapshotBatch(snapshots, notify, kMsg, remaining);
+            if (batch.empty())
+                break;
+            for (const auto& r : batch) {
+                ok = ok && Check(r.window == notify, "concurrent result window mismatch");
+                if (r.shrinkGen == 0) {
+                    sawCapture = true;
+                } else {
+                    ++shrinkCount;
+                    ok = ok && Check(r.shrinkGen == 11 || r.shrinkGen == 12, "RequestShrink unexpected shrinkGen");
+                    ok = ok && Check(!r.picture.ok && r.large.ok && std::max(r.large.width, r.large.height) == 100, "RequestShrink coalesced result invalid");
+                    lastShrinkGen = r.shrinkGen;
+                }
+            }
+        }
+        ok = ok && Check(sawCapture, "Request() on same HWND was suppressed by RequestShrink");
+        ok = ok && Check(shrinkCount >= 1 && shrinkCount <= 2 && lastShrinkGen == 12, "RequestShrink did not deliver latest gen");
+    }
+
+    DestroyWindow(notify);
+    return ok;
+}
+
 } // namespace
 
 int main()
@@ -196,6 +278,10 @@ int main()
         if (!Check(!BuildWindowPictureFromBgra(px, 4, 4, 16, 0, 4, 0.f).ok, "zero tw should fail"))
             return 1;
     }
+
+    // 6. Async RequestShrink() worker queue & capture queue isolation.
+    if (!TestAsyncRequestShrink())
+        return 1;
 
     return 0;
 }
