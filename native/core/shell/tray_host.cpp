@@ -3,10 +3,10 @@
 #include "log.h"
 #include "shell/shell_icon.h"
 #include "shell/shell_taskbar.h"
+#include "shell/tray_host_wire.h"
 #include "shell/tray_match.h"
 #include "win32_path.h"
 
-#include <objbase.h>
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <tlhelp32.h>
@@ -19,6 +19,9 @@ namespace atrium {
 
 namespace {
 
+using tray_wire::Handle, tray_wire::HashIconImage, tray_wire::KeyOf, tray_wire::kSignature;
+using tray_wire::NotifyIconData32, tray_wire::NotifyIconIdentifier32, tray_wire::TrayNotifyData;
+
 std::atomic<TrayHost*> g_host{nullptr}; // the running host, for its event hook
 
 constexpr UINT_PTR kKeepTimer = 1;      // keep the host first among Shell_TrayWnd windows; post changes
@@ -30,71 +33,8 @@ constexpr UINT kPopupMs = 500;
 constexpr UINT_PTR kRecollectTimer = 4; // after Explorer's own TaskbarCreated, the host's
 constexpr UINT kRecollectMs = 1500;
 constexpr DWORD kForwardMs = 4000;      // as long as an app waits for Explorer anyway
-constexpr DWORD kSignature = 0x34753423;
 constexpr uint64_t kImageBase = 1ull << 62; // apart from TrayModel's own picture versions
 constexpr wchar_t kTaskband[] = L"TaskbandHWND"; // Explorer's MSTaskSwWClass, on its Shell_TrayWnd
-
-// The shell's wire format (WM_COPYDATA dwData 1): handles as 32-bit values, the
-// same for 32- and 64-bit apps.
-struct NotifyIconData32 {
-    DWORD cbSize;
-    DWORD hWnd;
-    UINT uID;
-    UINT uFlags;
-    UINT uCallbackMessage;
-    DWORD hIcon;
-    WCHAR szTip[128];
-    DWORD dwState;
-    DWORD dwStateMask;
-    WCHAR szInfo[256];
-    UINT uVersion; // also uTimeout
-    WCHAR szInfoTitle[64];
-    DWORD dwInfoFlags;
-    GUID guidItem;
-    DWORD hBalloonIcon;
-};
-struct TrayNotifyData {
-    DWORD signature;
-    DWORD message;
-    NotifyIconData32 nid;
-};
-// Shell_NotifyIconGetRect (WM_COPYDATA dwData 3).
-struct NotifyIconIdentifier32 {
-    DWORD signature;
-    DWORD message; // 1: the top left corner, 2: the bottom right
-    DWORD cbSize;
-    DWORD padding;
-    DWORD hWnd;
-    UINT uID;
-    GUID guidItem;
-};
-
-HWND Handle(DWORD value) { return reinterpret_cast<HWND>(static_cast<ULONG_PTR>(value)); }
-
-uint64_t HashIconImage(const IconImage& img)
-{
-    uint64_t h = 14695981039346656037ULL;
-    auto mix = [&](uint64_t v) {
-        h ^= v;
-        h *= 1099511628211ULL;
-    };
-    mix(uint64_t(img.width));
-    mix(uint64_t(img.height));
-    for (uint8_t b : img.Bytes())
-        mix(b);
-    return h;
-}
-
-std::wstring KeyOf(HWND hwnd, UINT uid, const GUID* guid)
-{
-    wchar_t key[64];
-    if (guid && *guid != GUID{}) {
-        StringFromGUID2(*guid, key, 64);
-        return L"guid:" + std::wstring(key);
-    }
-    swprintf_s(key, L"hwnd:%p:%u", static_cast<void*>(hwnd), uid);
-    return key;
-}
 
 std::wstring ProcessPath(DWORD pid)
 {
@@ -412,7 +352,7 @@ LRESULT TrayHost::OnNotifyIcon(WPARAM w, const COPYDATASTRUCT* cds)
     if (!data || cds->cbData < offsetof(TrayNotifyData, nid.szInfo) || data->signature != kSignature)
         return Forward(WM_COPYDATA, w, reinterpret_cast<LPARAM>(cds));
     const NotifyIconData32& nid = data->nid;
-    const bool hasGuid = (nid.uFlags & NIF_GUID) && cds->cbData >= offsetof(TrayNotifyData, nid.guidItem) + sizeof(GUID);
+    const bool hasGuid = (nid.uFlags & NIF_GUID) && cds->cbData >= offsetof(TrayNotifyData, nid.guidItem) + sizeof(GUID) && nid.guidItem != GUID{};
     const HWND hwnd = Handle(nid.hWnd);
     const std::wstring key = KeyOf(hwnd, nid.uID, hasGuid ? &nid.guidItem : nullptr);
 
@@ -446,7 +386,7 @@ LRESULT TrayHost::OnNotifyIcon(WPARAM w, const COPYDATASTRUCT* cds)
         COPYDATASTRUCT again{cds->dwData, cds->cbData, copy.data()};
         forwardResult = Forward(WM_COPYDATA, w, reinterpret_cast<LPARAM>(&again), &sent, &err);
     }
-    const bool knownIcon = !forwardResult && HasIcon(key);
+    const bool knownIcon = !forwardResult && HasIcon(key, hasGuid, hwnd, nid.uID);
     const bool validWindow = hwnd && IsWindow(hwnd) && PidOf(hwnd) != 0 && PidOf(hwnd) != ShellPid();
     const LRESULT result = tray::DecideHostForwardResult(data->message, shell != nullptr, forwardResult, knownIcon, validWindow);
     if (shell && !forwardResult && !loggedRefusedForward_) {
@@ -457,21 +397,21 @@ LRESULT TrayHost::OnNotifyIcon(WPARAM w, const COPYDATASTRUCT* cds)
             targetPath.empty() ? L"-" : PathFindFileNameW(targetPath.c_str()), targetPid, sent ? 1 : 0, err, long(forwardResult), result ? 1 : 0);
     }
     try {
-        Record(data->message, cds->cbData, &nid, hwnd, key, std::move(image), result);
+        Record(data->message, cds->cbData, &nid, hwnd, hasGuid, key, std::move(image), result);
     } catch (...) {
         Log(L"tray host: could not record a %s", Name(data->message));
     }
     return result;
 }
 
-void TrayHost::Record(DWORD message, DWORD cbData, const void* nidPtr, HWND hwnd, const std::wstring& key, std::shared_ptr<const IconImage> image,
+void TrayHost::Record(DWORD message, DWORD cbData, const void* nidPtr, HWND hwnd, bool hasGuid, const std::wstring& key, std::shared_ptr<const IconImage> image,
                       LRESULT result)
 {
     const auto& nid = *static_cast<const NotifyIconData32*>(nidPtr);
     const bool hasVersion = cbData >= offsetof(TrayNotifyData, nid.szInfoTitle);
 
     std::lock_guard g(mutex_);
-    auto it = icons_.find(key);
+    auto it = FindIconLocked(key, hasGuid, hwnd, nid.uID);
     if (message == NIM_DELETE) {
         if (it != icons_.end()) {
             icons_.erase(it);
@@ -489,11 +429,11 @@ void TrayHost::Record(DWORD message, DWORD cbData, const void* nidPtr, HWND hwnd
     if (message != NIM_ADD && message != NIM_MODIFY)
         return;
     if (it == icons_.end()) {
-            // A change of an icon the host has not seen (added before it started, the app
-            // ignored TaskbarCreated) that Explorer took: the host learns it from here.
+        // A change of an icon the host has not seen (added before it started, the app
+        // ignored TaskbarCreated) that Explorer took: the host learns it from here.
         if (!result)
             return;
-            // The shell's own icons (volume, network...) stay Explorer's: Atrium has its control centre.
+        // The shell's own icons (volume, network...) stay Explorer's: Atrium has its control centre.
         const DWORD pid = PidOf(hwnd);
         if (!pid || pid == ShellPid())
             return;
@@ -504,8 +444,8 @@ void TrayHost::Record(DWORD message, DWORD cbData, const void* nidPtr, HWND hwnd
     HostIcon& icon = it->second;
     if (hwnd && icon.hwnd != hwnd) {
         icon.hwnd = hwnd, icon.pid = PidOf(hwnd);
-        std::wstring path = ProcessPath(icon.pid);
-        icon.exe = path.empty() ? L"" : FoldCase(AppExecutable(path));
+        if (const std::wstring path = ProcessPath(icon.pid); !path.empty())
+            icon.exe = FoldCase(AppExecutable(path));
     }
     icon.uid = nid.uID;
     if (nid.uFlags & NIF_MESSAGE)
@@ -535,12 +475,11 @@ LRESULT TrayHost::OnIconRect(WPARAM w, const COPYDATASTRUCT* cds)
     if (!id || cds->cbData < sizeof(NotifyIconIdentifier32) || id->signature != kSignature || g_shellQuestions > 0)
         return Forward(WM_COPYDATA, w, reinterpret_cast<LPARAM>(cds));
     const HWND hwnd = Handle(id->hWnd);
+    const bool hasGuid = id->guidItem != GUID{};
     RECT r{};
     {
         std::lock_guard g(mutex_);
-        auto it = icons_.find(KeyOf(hwnd, id->uID, &id->guidItem));
-        if (it == icons_.end() && id->guidItem == GUID{} && hwnd)
-            it = std::ranges::find_if(icons_, [&](const auto& e) { return e.second.hwnd == hwnd && e.second.uid == id->uID; });
+        auto it = FindIconLocked(KeyOf(hwnd, id->uID, hasGuid ? &id->guidItem : nullptr), hasGuid, hwnd, id->uID);
         r = tray::ResolveHostIconRect(it != icons_.end() ? it->first : std::wstring{}, clickedKey_, clicked_, hoverKey_, hovered_, anchor_);
     }
     if (IsRectEmpty(&r))
@@ -603,15 +542,25 @@ void TrayHost::KeepFirst()
 
 void TrayHost::HandleExplorerFront(HWND w, ULONGLONG now, bool wasYielded)
 {
-    bool newlyYielded = false;
-    if (!yieldPolicy_.OnExplorerFirst(now, newlyYielded)) {
-        yielded_ = true;
-        if (newlyYielded)
-            Log(L"tray host: Explorer's taskbar repeatedly reclaimed first (%d times); backing off 60s", yieldPolicy_.rapidLosses), dirty_ = true;
-        return;
+    const bool inAsideGrace = now < g_hostAsideGraceUntil.load(std::memory_order_acquire);
+    if (!inAsideGrace || yieldPolicy_.Reason() != TrayHostYieldReason::None) {
+        bool newlyYielded = false;
+        if (!yieldPolicy_.OnExplorerFirst(now, newlyYielded)) {
+            yielded_ = true;
+            if (newlyYielded) {
+                const ULONGLONG backoffSec = yieldPolicy_.retryAt > now ? (yieldPolicy_.retryAt - now) / 1000 : 0;
+                Log(L"tray host: Explorer's taskbar repeatedly reclaimed first (%d times); backing off %llus", yieldPolicy_.rapidLosses, backoffSec);
+                dirty_ = true;
+            }
+            return;
+        }
     }
     SetWindowPos(w, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-    const bool again = FindWindowW(L"Shell_TrayWnd", nullptr) == w;
+    bool again = FindWindowW(L"Shell_TrayWnd", nullptr) == w;
+    if (!again && (GetWindowLongPtrW(w, GWL_EXSTYLE) & WS_EX_TOPMOST)) {
+        SetWindowPos(w, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        again = FindWindowW(L"Shell_TrayWnd", nullptr) == w;
+    }
     if (again)
         yieldPolicy_.OnFirst();
     const bool nowYielded = yieldPolicy_.Yielded();

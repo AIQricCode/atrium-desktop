@@ -21,7 +21,7 @@ std::wstring Key(const std::wstring& text)
 {
     std::wstring out;
     for (wchar_t c : text)
-        if (!iswspace(c) && std::wstring_view(L"-_:：·|()（）[]【】.,，").find(c) == std::wstring_view::npos)
+        if (!iswspace(c) && std::wstring_view(L"-_:：·|()（）[]【】.,，。；;").find(c) == std::wstring_view::npos)
             out += c >= L'A' && c <= L'Z' ? wchar_t(c + L'a' - L'A') : c;
     return out;
 }
@@ -56,6 +56,8 @@ std::optional<ShellTrayKnown> KnownShellTray(const std::wstring& guidOrId)
         return ShellTrayKnown{{L"蓝牙设备", L"Bluetooth Devices", L"Bluetooth"}, L"bthprops.cpl"};
     if (norm == L"7820AE78-23E3-4229-82C1-E41CB67D5B9C")
         return ShellTrayKnown{{L"安全删除硬件并弹出媒体", L"Safely Remove Hardware and Eject Media"}, L"hotplug.dll"};
+    if (norm == L"BA82E2DC-F405-47AD-B032-CF0FAA0E3933")
+        return ShellTrayKnown{{L"Windows 安全中心", L"Windows Security"}, nullptr};
     return std::nullopt;
 }
 std::wstring FallbackRecordTip(const Record& r)
@@ -440,6 +442,16 @@ bool TipMatches(const std::wstring& expTip, const std::wstring& hostTip)
         return false;
     return ek == hk || DelimitedPrefix(et, hk) || DelimitedPrefix(ht, ek);
 }
+bool TipContainsTooltipSegment(const std::wstring& expTip, const std::wstring& hostTip)
+{
+    const auto et = Title(expTip), ht = Title(hostTip), hk = Key(ht);
+    return hk.size() >= 4 && DelimitedContains(et, hk);
+}
+bool HasNonTrivialHostTip(const std::wstring& hostTip)
+{
+    const auto hk = Key(Title(hostTip));
+    return hk.size() >= 6 || std::ranges::any_of(hk, [](wchar_t ch) { return ch >= 0x80; });
+}
 bool UniqueUnpairedUid(const std::vector<HostedEntry>& hosted, const std::vector<ExplorerEntry>& explorer, const std::vector<size_t>& hostedFallback,
                        const std::vector<bool>& usedExp, size_t hi)
 {
@@ -466,7 +478,7 @@ bool HostedMatchesTier(const HostedEntry& h, const ExplorerEntry& e, int tier, b
         uint64_t eHwnd = 0, eUid = 0, hHwnd = 0, hUid = 0;
         const bool hwndUidMatch = compatExe && ParseExplorerUidKey(e.recordId, ePid, eHwnd, eUid) && ParseHostHwndKey(h.key, hHwnd, hUid) && eHwnd != 0 &&
                                   hHwnd != 0 && eHwnd == hHwnd && eUid == hUid;
-        return (sameExe && !e.recordId.empty() && e.recordId == h.key) || hwndUidMatch;
+        return (compatExe && h.key.starts_with(L"guid:") && e.recordId == h.key) || (sameExe && !e.recordId.empty() && e.recordId == h.key) || hwndUidMatch;
     }
     case 1: return sameExe && h.hasUid && uniqueUid && UidOf(e.recordId) == h.uid;
     case 2: return sameExe && !Key(Title(h.tip)).empty() && Key(Title(h.tip)) == Key(Title(e.tip));
@@ -475,7 +487,10 @@ bool HostedMatchesTier(const HostedEntry& h, const ExplorerEntry& e, int tier, b
         return compatExe && !ek.empty() && (ek == Key(Title(h.tip)) || ek == Key(Title(h.fallbackTip)));
     }
     case 4: return compatExe && (TipMatches(e.tip, h.tip) || TipMatches(e.tip, h.fallbackTip));
-    case 5: return sameExe;
+    case 5:
+        return compatExe && ((TipContainsTooltipSegment(e.tip, h.tip) && (!h.exe.empty() || HasNonTrivialHostTip(h.tip))) ||
+                             (TipContainsTooltipSegment(e.tip, h.fallbackTip) && (!h.exe.empty() || HasNonTrivialHostTip(h.fallbackTip))));
+    case 6: return sameExe;
     default: return false;
     }
 }
@@ -504,28 +519,29 @@ bool HostedClaimsUnknown(const std::vector<HostedEntry>& hosted, const ExplorerE
     if (Key(Title(exp.tip)).empty())
         return true;
     return std::ranges::any_of(hosted, [&](const HostedEntry& h) {
-        return TipMatches(exp.tip, h.tip) || TipMatches(exp.tip, h.fallbackTip) || TipMatches(exp.tip, h.productName) || TipMatches(exp.tip, ExeStem(h.exe));
+        return TipMatches(exp.tip, h.tip) || TipMatches(exp.tip, h.fallbackTip) || TipMatches(exp.tip, h.productName) || TipMatches(exp.tip, ExeStem(h.exe)) ||
+               TipContainsTooltipSegment(exp.tip, h.tip) || TipContainsTooltipSegment(exp.tip, h.fallbackTip);
     });
 }
 bool HostedSuppressesDuplicateExe(const std::vector<HostedEntry>& hosted, const std::vector<ExplorerEntry>& explorer, const std::vector<size_t>& hostedFallback,
                                   const ExplorerEntry& exp)
 {
+    if (exp.recordId.starts_with(L"guid:")) {
+        for (size_t hi = 0; hi < hosted.size(); ++hi) {
+            if (hosted[hi].key == exp.recordId)
+                return true;
+            if (hostedFallback[hi] != kNone && explorer[hostedFallback[hi]].recordId == exp.recordId)
+                return true;
+        }
+        return false;
+    }
     if (exp.exe.empty() || std::ranges::none_of(hosted, [&](const HostedEntry& h) { return !h.exe.empty() && h.exe == exp.exe; }))
         return false;
-    if (!exp.recordId.starts_with(L"guid:")) {
-        uint32_t expPid = 0;
-        uint64_t expHwnd = 0, expUid = 0;
-        if (!ParseExplorerUidKey(exp.recordId, expPid, expHwnd, expUid) || expPid == 0)
-            return true;
-        return std::ranges::any_of(hosted, [&](const HostedEntry& h) { return !h.exe.empty() && h.exe == exp.exe && h.pid == expPid; });
-    }
-    for (size_t hi = 0; hi < hosted.size(); ++hi) {
-        if (hosted[hi].key == exp.recordId)
-            return true;
-        if (hostedFallback[hi] != kNone && explorer[hostedFallback[hi]].recordId == exp.recordId)
-            return true;
-    }
-    return false;
+    uint32_t expPid = 0;
+    uint64_t expHwnd = 0, expUid = 0;
+    if (!ParseExplorerUidKey(exp.recordId, expPid, expHwnd, expUid) || expPid == 0)
+        return true;
+    return std::ranges::any_of(hosted, [&](const HostedEntry& h) { return !h.exe.empty() && h.exe == exp.exe && h.pid == expPid; });
 }
 } // namespace
 std::wstring RepairMojibakeTip(const std::wstring& tip)
@@ -584,7 +600,7 @@ MergedTrayView MergeHostedIcons(const std::vector<HostedEntry>& hosted, const st
     MergedTrayView view;
     view.hostedFallback.assign(hosted.size(), kNone);
     std::vector<bool> usedExp(explorer.size(), false);
-    for (int tier = 0; tier < 6; ++tier)
+    for (int tier = 0; tier < 7; ++tier)
         for (size_t hi = 0; hi < hosted.size(); ++hi) {
             if (view.hostedFallback[hi] != kNone)
                 continue;

@@ -585,6 +585,8 @@ void FillRecordNames(const std::wstring& path, const Program& program, const std
     if (auto dot = stem.rfind(L'.'); dot != std::wstring::npos)
         stem.resize(dot);
     out = {tip, std::move(desc), std::move(prod), stem};
+    if (const auto known = tray::KnownShellTray(guidOrId))
+        out.insert(out.end(), known->aliases.begin(), known->aliases.end());
     if (auto it = labels.find(path); it != labels.end())
         out.insert(out.end(), it->second.begin(), it->second.end());
     firstTitle = out.size();
@@ -977,10 +979,11 @@ TrayIcon BuildHostedIcon(const HostIcon& h, const tray::HostedEntry& entry, cons
                          InkCache& newInk)
 {
     static const tray::ShellSession kHostShell{1, 1, 1};
-    TrayIcon t{entry.tip, h.exe, h.image, h.imageVersion};
+    const std::wstring exe = !h.exe.empty() ? h.exe : (fb ? fb->exe : std::wstring{});
+    TrayIcon t{entry.tip, exe, h.image, h.imageVersion};
     t.hostKey = h.key, t.pid = h.pid, t.appTooltip = h.version >= 4 && !h.showTip, t.flashing = h.flashUntil > GetTickCount64();
-    t.order = fb && fb->order != SIZE_MAX ? fb->order : order.contains(L"exe:" + h.exe) ? order.at(L"exe:" + h.exe) : SIZE_MAX;
-    for (const auto& k : {L"uid:" + h.exe + L"|" + std::to_wstring(h.uid), h.key})
+    t.order = fb && fb->order != SIZE_MAX ? fb->order : order.contains(L"exe:" + exe) ? order.at(L"exe:" + exe) : SIZE_MAX;
+    for (const auto& k : {L"uid:" + exe + L"|" + std::to_wstring(h.uid), h.key})
         if (auto o = order.find(k); o != order.end())
             t.order = o->second;
     if (t.tip.empty())

@@ -36,7 +36,7 @@ void TestYieldPolicy()
         Check(!p.OnFirst() && !p.Yielded() && p.rapidLosses == 0, "OnFirst resets rapidLosses after reclaim");
     }
 
-    // 2. RapidLoss trips on the 6th loss within 5s, stays yielded < 60s, retries >= 60s, and resets on OnFirst().
+    // 2. RapidLoss debounces losses < kLossSampleMs, trips on the 6th sampled loss within 5s with progressive backoff, and resets on OnFirst().
     {
         TrayHostYieldPolicy p;
         p.OnShellPid(100, false);
@@ -46,21 +46,21 @@ void TestYieldPolicy()
         Check(p.OnExplorerFirst(1000, newlyYielded) && !newlyYielded, "loss 1");
         Check(p.OnExplorerFirst(7000, newlyYielded) && !newlyYielded && p.rapidLosses == 1, "loss after >5s resets window");
 
-        // Mid-burst OnFirst() resets rapidLosses.
+        // Mid-burst OnFirst() resets rapidLosses (5 sampled losses >= 400ms apart).
         for (int i = 0; i < 4; ++i)
-            Check(p.OnExplorerFirst(7100 + ULONGLONG(i) * 100, newlyYielded) && !newlyYielded, "burst before OnFirst");
+            Check(p.OnExplorerFirst(7400 + ULONGLONG(i) * 400, newlyYielded) && !newlyYielded, "burst before OnFirst");
         Check(p.rapidLosses == 5 && !p.Yielded(), "5 losses within 5s do not yield yet");
         Check(!p.OnFirst() && p.rapidLosses == 0, "OnFirst resets rapidLosses mid-burst");
 
-        // 6 losses within 5s trips RapidLoss.
+        // 6 sampled losses within 5s trips RapidLoss (initial 10s backoff, expiring at 25000).
         for (int i = 0; i < 5; ++i)
             Check(p.OnExplorerFirst(10000 + ULONGLONG(i) * 500, newlyYielded) && !newlyYielded && !p.Yielded(), "losses 1..5 within 5s allow reclaim");
         Check(!p.OnExplorerFirst(15000, newlyYielded) && newlyYielded && p.Yielded() && p.Reason() == TrayHostYieldReason::RapidLoss,
               "6th loss within 5s trips RapidLoss");
-        Check(!p.OnExplorerFirst(74999, newlyYielded) && !newlyYielded && p.Yielded() && p.Reason() == TrayHostYieldReason::RapidLoss,
-              "stays yielded before 60s backoff expires");
-        Check(p.OnExplorerFirst(75000, newlyYielded) && !newlyYielded && !p.Yielded() && p.Reason() == TrayHostYieldReason::None,
-              "retries and clears yield once 60s backoff expires");
+        Check(!p.OnExplorerFirst(24999, newlyYielded) && !newlyYielded && p.Yielded() && p.Reason() == TrayHostYieldReason::RapidLoss,
+              "stays yielded before initial 10s backoff expires");
+        Check(p.OnExplorerFirst(25000, newlyYielded) && !newlyYielded && !p.Yielded() && p.Reason() == TrayHostYieldReason::None,
+              "retries and clears yield once initial 10s backoff expires");
         Check(!p.OnFirst() && p.rapidLosses == 0, "OnFirst resets count after backoff recovery");
     }
 

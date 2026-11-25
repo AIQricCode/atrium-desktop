@@ -43,6 +43,7 @@ struct ShellQuestion {
 // Above 0 while Atrium's tray host steps behind Explorer's taskbar for one of Atrium's own
 // app-bar calls (AppBarMessage): it does not move itself back in front meanwhile.
 inline std::atomic_int g_hostAside{0};
+inline std::atomic<ULONGLONG> g_hostAsideGraceUntil{0};
 
 inline std::atomic<HWND> g_shellFailHwnd{nullptr};
 inline std::atomic<ULONGLONG> g_shellFailAt{0};
@@ -103,6 +104,7 @@ inline bool TryAppBarMessage(DWORD message, APPBARDATA& abd, UINT_PTR& out, UINT
                 if (!host)
                     return;
                 SetWindowPos(host, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+                g_hostAsideGraceUntil.store(GetTickCount64() + 500, std::memory_order_release);
                 --g_hostAside;
             }
             HostAside(const HostAside&) = delete;

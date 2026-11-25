@@ -25,6 +25,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <map>
@@ -46,6 +47,7 @@ inline bool ShouldYieldToStartAllBack(bool hasModule, bool disabledForCurrentUse
 
 struct TrayHostYieldPolicy {
     static constexpr ULONGLONG kLossWindowMs = 5000;
+    static constexpr ULONGLONG kLossSampleMs = 400;
     static constexpr ULONGLONG kRapidBackoffMs = 60000;
     static constexpr int kRapidLossLimit = 6;
 
@@ -53,8 +55,10 @@ struct TrayHostYieldPolicy {
     bool hasStartAllBackModule = false;
     bool hasStartAllBack = false;
     ULONGLONG lossWindowStart = 0;
+    ULONGLONG lastLossAt = 0;
     ULONGLONG retryAt = 0;
     int rapidLosses = 0;
+    int backoffStep = 0;
     TrayHostYieldReason reason = TrayHostYieldReason::None;
 
     bool Yielded() const { return reason != TrayHostYieldReason::None; }
@@ -69,8 +73,10 @@ struct TrayHostYieldPolicy {
         const bool active = ShouldYieldToStartAllBack(hasModule, disabledForCurrentUser);
         hasStartAllBack = active;
         lossWindowStart = 0;
+        lastLossAt = 0;
         retryAt = 0;
         rapidLosses = 0;
+        backoffStep = 0;
         const bool wasYielded = Yielded();
         reason = active ? TrayHostYieldReason::StartAllBack : TrayHostYieldReason::None;
         return wasYielded && !active;
@@ -84,8 +90,10 @@ struct TrayHostYieldPolicy {
             return false;
         hasStartAllBack = active;
         lossWindowStart = 0;
+        lastLossAt = 0;
         retryAt = 0;
         rapidLosses = 0;
+        backoffStep = 0;
         if (active) {
             reason = TrayHostYieldReason::StartAllBack;
             return false;
@@ -103,8 +111,10 @@ struct TrayHostYieldPolicy {
             return false;
         }
         lossWindowStart = 0;
+        lastLossAt = 0;
         retryAt = 0;
         rapidLosses = 0;
+        backoffStep = 0;
         const bool wasYielded = Yielded();
         reason = TrayHostYieldReason::None;
         return wasYielded;
@@ -113,6 +123,7 @@ struct TrayHostYieldPolicy {
     bool OnOtherProcess()
     {
         lossWindowStart = 0;
+        lastLossAt = 0;
         rapidLosses = 0;
         if (reason == TrayHostYieldReason::StartAllBack)
             return false;
@@ -142,6 +153,9 @@ struct TrayHostYieldPolicy {
             retryAt = 0;
             rapidLosses = 0;
         }
+        if (rapidLosses > 0 && now >= lastLossAt && now - lastLossAt < kLossSampleMs)
+            return true;
+        lastLossAt = now;
         if (rapidLosses == 0 || now - lossWindowStart > kLossWindowMs) {
             lossWindowStart = now;
             rapidLosses = 1;
@@ -149,8 +163,10 @@ struct TrayHostYieldPolicy {
             ++rapidLosses;
         }
         if (rapidLosses >= kRapidLossLimit) {
+            const ULONGLONG backoff = backoffStep == 0 ? 10000 : backoffStep == 1 ? 30000 : kRapidBackoffMs;
+            backoffStep = std::min(backoffStep + 1, 2);
             reason = TrayHostYieldReason::RapidLoss;
-            retryAt = now + kRapidBackoffMs;
+            retryAt = now + backoff;
             newlyYielded = true;
             return false;
         }
@@ -216,13 +232,31 @@ private:
     void OnTimer(HWND h, WPARAM w);
     void HandleExplorerFront(HWND w, ULONGLONG now, bool wasYielded);
     LRESULT OnNotifyIcon(WPARAM w, const COPYDATASTRUCT* cds);
-    void Record(DWORD message, DWORD cbData, const void* nidPtr, HWND hwnd, const std::wstring& key, std::shared_ptr<const IconImage> image, LRESULT result);
+    void Record(DWORD message, DWORD cbData, const void* nidPtr, HWND hwnd, bool hasGuid, const std::wstring& key, std::shared_ptr<const IconImage> image,
+                LRESULT result);
     LRESULT OnIconRect(WPARAM w, const COPYDATASTRUCT* cds);
     LRESULT Forward(UINT m, WPARAM w, LPARAM l, BOOL* sent = nullptr, DWORD* err = nullptr);
-    bool HasIcon(const std::wstring& key) const
+    template<class Map> static auto FindIcon(Map& icons, const std::wstring& key, bool hasGuid, HWND hwnd, UINT uid)
+    {
+        auto it = icons.find(key);
+        if (it != icons.end() || hasGuid || !hwnd)
+            return it;
+        auto match = icons.end();
+        for (auto cur = icons.begin(); cur != icons.end(); ++cur) {
+            if (cur->second.hwnd == hwnd && cur->second.uid == uid) {
+                if (match != icons.end())
+                    return icons.end();
+                match = cur;
+            }
+        }
+        return match;
+    }
+    auto FindIconLocked(const std::wstring& key, bool hasGuid, HWND hwnd, UINT uid) { return FindIcon(icons_, key, hasGuid, hwnd, uid); }
+    auto FindIconLocked(const std::wstring& key, bool hasGuid, HWND hwnd, UINT uid) const { return FindIcon(icons_, key, hasGuid, hwnd, uid); }
+    bool HasIcon(const std::wstring& key, bool hasGuid, HWND hwnd, UINT uid) const
     {
         std::lock_guard g(mutex_);
-        return icons_.contains(key);
+        return FindIconLocked(key, hasGuid, hwnd, uid) != icons_.end();
     }
     void FinishKeepFirst(HWND first, HWND shell, DWORD shellPid, bool wasYielded);
     void Broadcast();

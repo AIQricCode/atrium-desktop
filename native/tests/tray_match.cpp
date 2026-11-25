@@ -30,6 +30,11 @@ void TestMojibakeAndKnownShell()
     Check(bt && std::wstring(bt->iconDll) == L"bthprops.cpl" && bt->aliases.size() == 3, "known bluetooth shell tray");
     const auto usb = KnownShellTray(L"guid:{7820ae78-23e3-4229-82c1-e41cb67d5b9c}");
     Check(usb && std::wstring(usb->iconDll) == L"hotplug.dll" && usb->aliases.size() == 2, "known safely remove shell tray");
+    const auto sec = KnownShellTray(L"{BA82E2DC-F405-47AD-B032-CF0FAA0E3933}");
+    Check(sec && sec->iconDll == nullptr && sec->aliases.size() == 2 && sec->aliases[0] == L"Windows 安全中心" && sec->aliases[1] == L"Windows Security",
+          "known windows security shell tray");
+    const auto secLower = KnownShellTray(L"guid:{ba82e2dc-f405-47ad-b032-cf0faa0e3933}");
+    Check(secLower && secLower->iconDll == nullptr && secLower->aliases == sec->aliases, "known windows security lowercase guid");
     Check(!KnownShellTray(L"{00000000-0000-0000-0000-000000000000}"), "unknown guid returns nullopt");
 
     for (const std::wstring& clean : {std::wstring(L"蓝牙设备"), std::wstring(L"安全删除硬件并弹出媒体"), std::wstring(L"模式"),
@@ -176,6 +181,62 @@ void TestAttachRemainingAndMultiInstance()
     Check(mergedPid.hostedFallback[0] == 0 && mergedPid.extraExplorer.size() == 1 && mergedPid.extraExplorer[0] == 2,
           "MergeHostedIcons preserves distinct-PID uid icon of same exe while suppressing same-PID and pid=0 duplicates");
 }
+void TestElevatedGuidAndConcatenatedTips()
+{
+    std::vector<HostedEntry> hostedGuid{
+        {L"guid:{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}", L"", L"Elevated Service", L"", L"", 0, false, 0},
+        {L"uid:1:2:3", L"", L"Should Not Match Non-Guid", L"", L"", 3, true, 1},
+    };
+    std::vector<ExplorerEntry> explorerGuid{
+        {L"guid:{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}", L"c:\\svc\\svc.exe", L"Different Tip", true},
+        {L"uid:1:2:3", L"c:\\other\\other.exe", L"Other", true},
+        {L"guid:{99999999-9999-9999-9999-999999999999}", L"", L"Unmatched Guid", true},
+    };
+    const auto mergedGuid = MergeHostedIcons(hostedGuid, explorerGuid);
+    Check(mergedGuid.hostedFallback[0] == 0, "T1: empty-exe guid: hosted matches Explorer guid: record in Tier 0");
+    Check(mergedGuid.hostedFallback[1] == kNone, "T1: non-guid recordId still requires sameExe in Tier 0");
+    Check(mergedGuid.extraExplorer.size() == 2 && mergedGuid.extraExplorer[0] == 1 && mergedGuid.extraExplorer[1] == 2,
+          "T1: guid: dedup suppresses matched guid: without false-suppressing unrelated icons");
+
+    std::vector<HostedEntry> hostedSeg{
+        {L"hwnd:10:1", L"c:\\windows\\system32\\securityhealthsystray.exe", L"Windows 安全中心", L"", L"", 1, true, 10},
+        {L"hwnd:20:1", L"", L"OpenVPN", L"", L"", 1, true, 20},
+    };
+    std::vector<ExplorerEntry> explorerSeg{
+        {L"", L"", L"系统托盘；Windows 安全中心。无需操作", false},
+        {L"", L"", L"Tray - OpenVPN; Connected", false},
+    };
+    const auto mergedSeg = MergeHostedIcons(hostedSeg, explorerSeg);
+    Check(mergedSeg.hostedFallback[0] == 0 && mergedSeg.hostedFallback[1] == 1 && mergedSeg.extraExplorer.empty(),
+          "T2: Win11 concatenated multi-segment tooltips pair and claim unknown in Tier 5");
+
+    const auto mergedShort = MergeHostedIcons({{L"hwnd:1:1", L"", L"Open", L"", L"", 1, true, 1}},
+                                              {{L"", L"c:\\other\\other.exe", L"Tray - Open; Ready", false}});
+    Check(mergedShort.hostedFallback[0] == kNone, "T2: empty-exe short 4-char ASCII tip does not mispair in Tier 5");
+
+    std::vector<HostedEntry> hostedCode{
+        {L"hwnd:100:1", L"c:\\apps\\code.exe", L"VS Code", L"", L"Code", 1, true, 100},
+    };
+    std::vector<ExplorerEntry> explorerCode{
+        {L"uid:100:100:1", L"c:\\apps\\code.exe", L"VS Code", true},
+        {L"", L"", L"QR Code Generator", false},
+    };
+    const auto mergedCode = MergeHostedIcons(hostedCode, explorerCode);
+    Check(mergedCode.hostedFallback[0] == 0 && mergedCode.extraExplorer.size() == 1 && mergedCode.extraExplorer[0] == 1,
+          "T2 negative: code.exe does not falsely claim unrelated 'QR Code Generator' button");
+
+    Record secRec;
+    secRec.id = L"sec";
+    secRec.exe = L"c:\\windows\\system32\\securityhealthsystray.exe";
+    secRec.identity = L"guid:{BA82E2DC-F405-47AD-B032-CF0FAA0E3933}";
+    secRec.live = true;
+    secRec.order = 0;
+    secRec.names = {L"", L"Windows Security notification icon", L"Windows Security", L"SecurityHealthSystray", L"Windows 安全中心", L"Windows Security"};
+    secRec.firstTitle = secRec.names.size();
+    const auto secMatch = Match({{L"系统状态；Windows 安全中心。无需操作", false}}, {secRec});
+    Check(secMatch.items.size() == 1 && secMatch.items[0].record == 0 && secMatch.items[0].method == Method::Name,
+          "T5: KnownShellTray Windows Security alias matches concatenated UIA tooltip");
+}
 int main()
 {
     try {
@@ -237,6 +298,7 @@ int main()
         TestMojibakeAndKnownShell();
         TestOrderAndDedup();
         TestAttachRemainingAndMultiInstance();
+        TestElevatedGuidAndConcatenatedTips();
         std::cout << "tray matching: all scenarios passed\n";
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

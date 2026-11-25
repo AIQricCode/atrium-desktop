@@ -58,11 +58,105 @@ bool TestStartAllBackYieldPolicy()
     return true;
 }
 
+bool TestRapidLossYieldPolicy()
+{
+    TrayHostYieldPolicy policy;
+    bool newlyYielded = false;
+
+    // 100ms bursts within kLossSampleMs (400ms) must not increment rapidLosses.
+    if (!policy.OnExplorerFirst(1000, newlyYielded) || newlyYielded || policy.rapidLosses != 1 || policy.lastLossAt != 1000) {
+        std::fprintf(stderr, "FAIL: first loss should record rapidLosses=1\n");
+        return false;
+    }
+    for (ULONGLONG t : {1100ULL, 1200ULL, 1399ULL}) {
+        if (!policy.OnExplorerFirst(t, newlyYielded) || newlyYielded || policy.rapidLosses != 1 || policy.lastLossAt != 1000) {
+            std::fprintf(stderr, "FAIL: sub-sample burst at %llu should be debounced\n", static_cast<unsigned long long>(t));
+            return false;
+        }
+    }
+
+    // Samples >= 400ms apart accumulate to kRapidLossLimit (6) -> 10s backoff (step 0 -> 1).
+    ULONGLONG t = 1400;
+    for (int i = 2; i < TrayHostYieldPolicy::kRapidLossLimit; ++i, t += 400) {
+        if (!policy.OnExplorerFirst(t, newlyYielded) || newlyYielded || policy.rapidLosses != i) {
+            std::fprintf(stderr, "FAIL: expected rapidLosses=%d at %llu\n", i, static_cast<unsigned long long>(t));
+            return false;
+        }
+    }
+    if (policy.OnExplorerFirst(t, newlyYielded) || !newlyYielded || policy.Reason() != TrayHostYieldReason::RapidLoss ||
+        policy.retryAt != t + 10000 || policy.backoffStep != 1) {
+        std::fprintf(stderr, "FAIL: 6th sampled loss should trigger 10s RapidLoss backoff\n");
+        return false;
+    }
+    if (policy.OnExplorerFirst(t + 9999, newlyYielded) || newlyYielded) {
+        std::fprintf(stderr, "FAIL: should stay yielded during 10s backoff\n");
+        return false;
+    }
+
+    // Cycle 2 after 10s expiry without OnFirst(): escalates to 30s backoff (step 1 -> 2).
+    t += 10000;
+    if (!policy.OnExplorerFirst(t, newlyYielded) || newlyYielded || policy.rapidLosses != 1 || policy.backoffStep != 1) {
+        std::fprintf(stderr, "FAIL: post-10s recovery should keep backoffStep=1\n");
+        return false;
+    }
+    for (int i = 2; i < TrayHostYieldPolicy::kRapidLossLimit; ++i) {
+        t += 400;
+        if (!policy.OnExplorerFirst(t, newlyYielded) || newlyYielded) {
+            std::fprintf(stderr, "FAIL: cycle 2 sample %d failed\n", i);
+            return false;
+        }
+    }
+    t += 400;
+    if (policy.OnExplorerFirst(t, newlyYielded) || !newlyYielded || policy.Reason() != TrayHostYieldReason::RapidLoss ||
+        policy.retryAt != t + 30000 || policy.backoffStep != 2) {
+        std::fprintf(stderr, "FAIL: cycle 2 should escalate to 30s backoff\n");
+        return false;
+    }
+
+    // Cycle 3 after 30s expiry without OnFirst(): escalates to 60s backoff (capped at step 2).
+    t += 30000;
+    if (!policy.OnExplorerFirst(t, newlyYielded) || newlyYielded || policy.rapidLosses != 1) {
+        std::fprintf(stderr, "FAIL: post-30s recovery failed\n");
+        return false;
+    }
+    for (int i = 2; i < TrayHostYieldPolicy::kRapidLossLimit; ++i) {
+        t += 400;
+        if (!policy.OnExplorerFirst(t, newlyYielded) || newlyYielded) {
+            std::fprintf(stderr, "FAIL: cycle 3 sample %d failed\n", i);
+            return false;
+        }
+    }
+    t += 400;
+    if (policy.OnExplorerFirst(t, newlyYielded) || !newlyYielded || policy.Reason() != TrayHostYieldReason::RapidLoss ||
+        policy.retryAt != t + TrayHostYieldPolicy::kRapidBackoffMs || policy.backoffStep != 2) {
+        std::fprintf(stderr, "FAIL: cycle 3 should escalate to 60s backoff\n");
+        return false;
+    }
+
+    // OnFirst() resets backoffStep and rapid-loss state back to 10s on future cycles.
+    if (!policy.OnFirst() || policy.Yielded() || policy.backoffStep != 0 || policy.lastLossAt != 0 || policy.rapidLosses != 0) {
+        std::fprintf(stderr, "FAIL: OnFirst() should reset RapidLoss backoff state\n");
+        return false;
+    }
+    t += 70000;
+    for (int i = 1; i < TrayHostYieldPolicy::kRapidLossLimit; ++i, t += 400) {
+        if (!policy.OnExplorerFirst(t, newlyYielded) || newlyYielded) {
+            std::fprintf(stderr, "FAIL: post-OnFirst sample %d failed\n", i);
+            return false;
+        }
+    }
+    if (policy.OnExplorerFirst(t, newlyYielded) || !newlyYielded || policy.retryAt != t + 10000 || policy.backoffStep != 1) {
+        std::fprintf(stderr, "FAIL: after OnFirst() reset, backoff should start at 10s again\n");
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main()
 {
-    if (!TestStartAllBackYieldPolicy())
+    if (!TestStartAllBackYieldPolicy() || !TestRapidLossYieldPolicy())
         return 1;
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < 20; ++i) {
