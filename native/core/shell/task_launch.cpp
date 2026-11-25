@@ -447,8 +447,7 @@ void RestoreOffscreenWindowIfNeeded(HWND h)
     MONITORINFO primaryInfo{sizeof(primaryInfo)};
     if (!GetMonitorInfoW(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY), &primaryInfo))
         return;
-    const OffscreenRestorePlan plan =
-        ComputeOffscreenRestorePlan(wr, wp.rcNormalPosition, wp.flags, monitors, {primaryInfo.rcMonitor, primaryInfo.rcWork});
+    const OffscreenRestorePlan plan = ComputeOffscreenRestorePlan(wr, wp.rcNormalPosition, wp.flags, monitors, {primaryInfo.rcMonitor, primaryInfo.rcWork});
     if (!plan.shouldRestore)
         return;
     wp.flags |= WPF_ASYNCWINDOWPLACEMENT;

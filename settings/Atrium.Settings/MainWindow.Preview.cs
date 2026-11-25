@@ -255,7 +255,11 @@ public sealed partial class MainWindow
 
     private void OnNotifyStageSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_windowLoaded && _page == 3 && Math.Abs(e.NewSize.Width - e.PreviousSize.Width) + Math.Abs(e.NewSize.Height - e.PreviousSize.Height) > 0.5) ShowNotifyPreview(false);
+        if (_windowLoaded && _page == 3 &&
+            Math.Abs(e.NewSize.Width - e.PreviousSize.Width) + Math.Abs(e.NewSize.Height - e.PreviousSize.Height) > 0.5)
+        {
+            ShowNotifyPreview(false);
+        }
     }
 
     private void OnReplayNotify(object sender, RoutedEventArgs e) => ReplayNotify();

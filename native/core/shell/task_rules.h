@@ -265,8 +265,7 @@ struct MonitorBounds {
 inline bool RectIntersectsAnyMonitor(const RECT& r, const std::vector<MonitorBounds>& monitors)
 {
     return std::ranges::any_of(monitors, [&](const MonitorBounds& m) {
-        return std::min(r.right, m.monitor.right) > std::max(r.left, m.monitor.left) &&
-               std::min(r.bottom, m.monitor.bottom) > std::max(r.top, m.monitor.top);
+        return std::min(r.right, m.monitor.right) > std::max(r.left, m.monitor.left) && std::min(r.bottom, m.monitor.bottom) > std::max(r.top, m.monitor.top);
     });
 }
 
@@ -315,14 +314,34 @@ inline OffscreenRestorePlan ComputeOffscreenRestorePlan(const RECT& windowRect, 
     return {true, RECT{left - offX, top - offY, left + w - offX, top + h - offY}, showCmd};
 }
 
-inline bool OffscreenBelongsToMonitor(HMONITOR windowNearestMonitor, HMONITOR normalNearestMonitor, HMONITOR targetMonitor,
-                                      HMONITOR primaryMonitor)
+inline bool OffscreenBelongsToMonitor(HMONITOR windowNearestMonitor, HMONITOR normalNearestMonitor, HMONITOR targetMonitor, HMONITOR primaryMonitor)
 {
     if (targetMonitor == nullptr)
         return true;
     if (windowNearestMonitor != nullptr)
         return windowNearestMonitor == targetMonitor;
     return (normalNearestMonitor ? normalNearestMonitor : primaryMonitor) == targetMonitor;
+}
+
+inline void FilterWindowsToMonitor(std::vector<HWND>& windows, HMONITOR targetMonitor)
+{
+    if (!targetMonitor)
+        return;
+    const HMONITOR primary = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    std::erase_if(windows, [&](HWND h) {
+        if (MonitorFromWindow(h, MONITOR_DEFAULTTONULL) != nullptr)
+            return !OffscreenBelongsToMonitor(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), nullptr, targetMonitor, primary);
+        HMONITOR normalMon = nullptr;
+        WINDOWPLACEMENT wp{sizeof(wp)};
+        MONITORINFO mi{sizeof(mi)};
+        if (GetWindowPlacement(h, &wp) && GetMonitorInfoW(primary, &mi)) {
+            const LONG ox = mi.rcWork.left - mi.rcMonitor.left, oy = mi.rcWork.top - mi.rcMonitor.top;
+            const RECT sr{wp.rcNormalPosition.left + ox, wp.rcNormalPosition.top + oy, wp.rcNormalPosition.right + ox, wp.rcNormalPosition.bottom + oy};
+            if (sr.right > sr.left && sr.bottom > sr.top && MonitorFromRect(&sr, MONITOR_DEFAULTTONULL) != nullptr)
+                normalMon = MonitorFromRect(&sr, MONITOR_DEFAULTTONEAREST);
+        }
+        return !OffscreenBelongsToMonitor(nullptr, normalMon, targetMonitor, primary);
+    });
 }
 
 } // namespace atrium

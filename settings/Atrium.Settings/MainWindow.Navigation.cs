@@ -46,6 +46,28 @@ public sealed partial class MainWindow
 
     private void ActivateCurrentPageAfterLoad() => ActivatePageAfterLoad(_page);
 
+    private void RefreshLoadedPreviews(bool fromLoad)
+    {
+        if (!_windowLoaded) return;
+        UpdateHero();
+        UpdateCustomSwatch();
+        if (_page == 3) ShowNotifyPreview(false);
+        if (fromLoad && _page == 4) ShowWidgetMap();
+        if (_page == 5)
+        {
+            if (fromLoad) ShowStagePreview(false);
+            else StageRenderGlass(StageCanvas.Width, StageCanvas.Height);
+        }
+        if (_page >= 10) ShowModulePreview(_page);
+    }
+
+    private void OnStageScrollWrapToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        CurrentSettings.StageScrollWrap = StageScrollWrapSwitch.IsOn;
+        Changed();
+    }
+
     private void ActivatePageAfterLoad(int index)
     {
         if (_mains[index] == DesignStack)

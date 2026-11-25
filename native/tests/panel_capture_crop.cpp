@@ -68,27 +68,23 @@ int main()
         return 1;
 
     // 6. Full-monitor copy (partialCopy=false) always covers the panel and clears pendingFresh.
-    const SecondaryBackdropDecision fullInit =
-        SecondaryPanelBackdropReady(false, mon, movedFar, mon, kPad, true, false, false, false, true, 0.0);
+    const SecondaryBackdropDecision fullInit = SecondaryPanelBackdropReady(false, mon, movedFar, mon, kPad, true, false, false, false, true, 0.0);
     if (!Check(fullInit.covered && fullInit.updateBackdrop && !fullInit.pendingFresh && !fullInit.waitForFresh,
                "full-monitor capture should cover panel and clear pendingFresh"))
         return 1;
 
     // 7. Partial copy covering the panel updates when pendingFresh is set and skips redundant updates when idle.
-    const SecondaryBackdropDecision coveredPending =
-        SecondaryPanelBackdropReady(true, b1, single, mon, kPad, true, false, false, true, true, 0.0);
+    const SecondaryBackdropDecision coveredPending = SecondaryPanelBackdropReady(true, b1, single, mon, kPad, true, false, false, true, true, 0.0);
     if (!Check(coveredPending.covered && coveredPending.updateBackdrop && !coveredPending.pendingFresh && !coveredPending.waitForFresh,
                "covered panel with pendingFresh should update and clear pendingFresh"))
         return 1;
-    const SecondaryBackdropDecision coveredIdle =
-        SecondaryPanelBackdropReady(true, b1, single, mon, kPad, true, false, false, true, false, 0.0);
+    const SecondaryBackdropDecision coveredIdle = SecondaryPanelBackdropReady(true, b1, single, mon, kPad, true, false, false, true, false, 0.0);
     if (!Check(coveredIdle.covered && !coveredIdle.updateBackdrop && !coveredIdle.pendingFresh && !coveredIdle.waitForFresh,
                "covered idle panel without pendingFresh should not update"))
         return 1;
 
     // 8. Uncovered partial copy with an existing backdrop refuses stale pixels and retains pendingFresh.
-    const SecondaryBackdropDecision uncoveredWithBackdrop =
-        SecondaryPanelBackdropReady(true, b1, movedFar, mon, kPad, true, false, true, true, false, 0.0);
+    const SecondaryBackdropDecision uncoveredWithBackdrop = SecondaryPanelBackdropReady(true, b1, movedFar, mon, kPad, true, false, true, true, false, 0.0);
     if (!Check(!uncoveredWithBackdrop.covered && !uncoveredWithBackdrop.updateBackdrop && uncoveredWithBackdrop.pendingFresh &&
                    !uncoveredWithBackdrop.waitForFresh,
                "uncovered panel with existing backdrop must skip stale update and set pendingFresh"))

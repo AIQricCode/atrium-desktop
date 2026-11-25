@@ -140,51 +140,44 @@ void CheckOffscreenRestorePlan(auto& check)
     const OffscreenRestorePlan emptyMonPlan = ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {100, 100, 900, 700}, 0, {}, primary);
     check(!emptyMonPlan.shouldRestore, "ComputeOffscreenRestorePlan is a no-op with empty monitor list");
 
-    const OffscreenRestorePlan onscreenPlan =
-        ComputeOffscreenRestorePlan({100, 100, 900, 700}, {100, 100, 900, 700}, 0, monitors, primary);
+    const OffscreenRestorePlan onscreenPlan = ComputeOffscreenRestorePlan({100, 100, 900, 700}, {100, 100, 900, 700}, 0, monitors, primary);
     check(!onscreenPlan.shouldRestore, "ComputeOffscreenRestorePlan is a no-op for already on-screen window");
 
-    const OffscreenRestorePlan validNormalPlan =
-        ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {120, 80, 1080, 720}, 0, monitors, primary);
-    check(validNormalPlan.shouldRestore && RectEq(validNormalPlan.workspaceRect, {120, 80, 1080, 720}) &&
-              validNormalPlan.showCmd == SW_SHOWNORMAL,
+    const OffscreenRestorePlan validNormalPlan = ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {120, 80, 1080, 720}, 0, monitors, primary);
+    check(validNormalPlan.shouldRestore && RectEq(validNormalPlan.workspaceRect, {120, 80, 1080, 720}) && validNormalPlan.showCmd == SW_SHOWNORMAL,
           "Kaspersky -32000 window with valid rcNormalPosition restores to rcNormalPosition");
 
-    const OffscreenRestorePlan maxPlan = ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {120, 80, 1080, 720},
-                                                                     WPF_RESTORETOMAXIMIZED, monitors, primary);
+    const OffscreenRestorePlan maxPlan =
+        ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {120, 80, 1080, 720}, WPF_RESTORETOMAXIMIZED, monitors, primary);
     check(maxPlan.shouldRestore && RectEq(maxPlan.workspaceRect, {120, 80, 1080, 720}) && maxPlan.showCmd == SW_SHOWMAXIMIZED,
           "WPF_RESTORETOMAXIMIZED selects SW_SHOWMAXIMIZED");
 
     // Both windowRect and rcNormalPosition parked at -32000 with 960x640 size -> centered in primary.work (0,48,1920,1080),
     // then converted back to workspace coordinates by subtracting (offX=0, offY=48).
-    const OffscreenRestorePlan offscreenNormalPlan = ComputeOffscreenRestorePlan(
-        {-32000, -32000, -31040, -31360}, {-32000, -32000, -31040, -31360}, 0, monitors, primary);
-    check(offscreenNormalPlan.shouldRestore && RectEq(offscreenNormalPlan.workspaceRect, {480, 196, 1440, 836}) &&
-              offscreenNormalPlan.showCmd == SW_SHOWNORMAL,
+    const OffscreenRestorePlan offscreenNormalPlan =
+        ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {-32000, -32000, -31040, -31360}, 0, monitors, primary);
+    check(offscreenNormalPlan.shouldRestore && RectEq(offscreenNormalPlan.workspaceRect, {480, 196, 1440, 836}) && offscreenNormalPlan.showCmd == SW_SHOWNORMAL,
           "-32000 rcNormalPosition is centered inside primary work area in workspace coordinates");
 
-    const OffscreenRestorePlan clampedPlan = ComputeOffscreenRestorePlan(
-        {-32000, -32000, -31040, -31360}, {-32000, -32000, -29000, -30000}, 0, monitors, primary);
+    const OffscreenRestorePlan clampedPlan =
+        ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {-32000, -32000, -29000, -30000}, 0, monitors, primary);
     check(clampedPlan.shouldRestore && RectEq(clampedPlan.workspaceRect, {0, 0, 1920, 1032}),
           "oversized off-screen rcNormalPosition is clamped to primary work area");
 
-    const OffscreenRestorePlan fallbackSizePlan = ComputeOffscreenRestorePlan(
-        {-32000, -32000, -32000, -32000}, {-32000, -32000, -32000, -32000}, 0, monitors, primary);
+    const OffscreenRestorePlan fallbackSizePlan =
+        ComputeOffscreenRestorePlan({-32000, -32000, -32000, -32000}, {-32000, -32000, -32000, -32000}, 0, monitors, primary);
     check(fallbackSizePlan.shouldRestore && RectEq(fallbackSizePlan.workspaceRect, {480, 196, 1440, 836}),
           "degenerate windowRect and rcNormalPosition fall back to 960x640 centered");
 
-    const OffscreenRestorePlan windowSizePlan = ComputeOffscreenRestorePlan(
-        {-32000, -32000, -31200, -31400}, {-32000, -32000, -32000, -32000}, 0, monitors, primary);
+    const OffscreenRestorePlan windowSizePlan =
+        ComputeOffscreenRestorePlan({-32000, -32000, -31200, -31400}, {-32000, -32000, -32000, -32000}, 0, monitors, primary);
     check(windowSizePlan.shouldRestore && RectEq(windowSizePlan.workspaceRect, {560, 216, 1360, 816}),
           "degenerate rcNormalPosition falls back to windowRect dimensions");
 
-    const OffscreenRestorePlan negMonPlan =
-        ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {-1500, 100, -500, 700}, 0, monitors, primary);
-    check(negMonPlan.shouldRestore && RectEq(negMonPlan.workspaceRect, {-1500, 100, -500, 700}),
-          "negative multi-monitor rcNormalPosition is preserved");
+    const OffscreenRestorePlan negMonPlan = ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {-1500, 100, -500, 700}, 0, monitors, primary);
+    check(negMonPlan.shouldRestore && RectEq(negMonPlan.workspaceRect, {-1500, 100, -500, 700}), "negative multi-monitor rcNormalPosition is preserved");
 
-    const OffscreenRestorePlan sliverPlan =
-        ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {1900, 100, 2400, 700}, 0, monitors, primary);
+    const OffscreenRestorePlan sliverPlan = ComputeOffscreenRestorePlan({-32000, -32000, -31040, -31360}, {1900, 100, 2400, 700}, 0, monitors, primary);
     check(sliverPlan.shouldRestore && RectEq(sliverPlan.workspaceRect, {710, 216, 1210, 816}),
           "barely-overlapping rcNormalPosition (< 64px visible) is recentered to primary work area");
 

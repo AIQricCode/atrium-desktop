@@ -725,7 +725,6 @@
                             </StackPanel>
                             <Button Content="Restore default appearance" Click="OnDefaults" HorizontalAlignment="Left" />
                         </StackPanel>
-
                         <!-- Shape: size and width -->
                         <StackPanel x:Name="SideShape" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
                             <StackPanel>
@@ -875,7 +874,6 @@
                                                   Note="When the taskbar is hidden, the Windows key brings it up with the start menu. Needs Win key opens Start menu." />
                             </StackPanel>
                         </StackPanel>
-
                         <!-- The tray -->
                         <StackPanel x:Name="SideTray" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
                             <StackPanel>
@@ -887,7 +885,6 @@
                                                   Note="Apps hand their tray icons to Atrium: the pictures stay live, and clicks, double clicks and right clicks work as in the Windows tray. When off, Atrium reads the icons back from the Windows tray." />
                             </StackPanel>
                         </StackPanel>
-
                         <!-- The input method -->
                         <StackPanel x:Name="SideIme" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
                             <StackPanel>
@@ -899,7 +896,6 @@
                                                   Note="While the taskbar is hidden, a glass bubble rises from the bottom of the screen with the new input language, then bursts. Not over full-screen apps." />
                             </StackPanel>
                         </StackPanel>
-
                         <!-- The status entry: shown, as a ring or as icons -->
                         <StackPanel x:Name="SideStatus" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
                             <StackPanel>
@@ -917,7 +913,6 @@
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>
-
                         <!-- The time -->
                         <StackPanel x:Name="SideClock" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
                             <StackPanel>
@@ -929,7 +924,6 @@
                                                   SwitchName="Clock shows seconds" Toggled="OnClockSecondsToggled" Flat="True" />
                             </StackPanel>
                         </StackPanel>
-
                         <!-- Notifications: the bell, how long, what they show, where from -->
                         <StackPanel x:Name="SideNotify" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
                             <StackPanel>
@@ -987,7 +981,6 @@
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>
-
                         <!-- Stage Manager: on or off, its side; how it is used -->
                         <StackPanel x:Name="SideStage" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
                             <StackPanel>
@@ -1020,10 +1013,12 @@
                                 <local:ToggleTile x:Name="StageAvoidSwitch" Title="Windows avoid the strip" SwitchName="Windows avoid the strip"
                                                   Note="A window coming to the front over the cards moves beside them. Off, it stays where it is and the cards step aside."
                                                   Toggled="OnStageAvoidToggled" Flat="True" />
-                                <local:ToggleTile x:Name="StageCloseButtonSwitch" Title="Close button on the cards" SwitchName="Close button on the cards"
+                                <local:ToggleTile x:Name="StageCloseButtonSwitch" Title="Close button on the cards"
+                                                  SwitchName="Close button on the cards"
                                                   Note="A cross at the top right of a group in the strip closes its windows."
                                                   Toggled="OnStageCloseButtonToggled" Flat="True" />
-                                <local:ToggleTile x:Name="StageScrollWrapSwitch" Title="Loop card scrolling" SwitchName="Loop card scrolling"
+                                <local:ToggleTile x:Name="StageScrollWrapSwitch" Title="Loop card scrolling"
+                                                  SwitchName="Loop card scrolling"
                                                   Note="Wrap past the last card back to the first when scrolling the strip."
                                                   Toggled="OnStageScrollWrapToggled" Flat="True" />
                             </StackPanel>
@@ -1031,8 +1026,8 @@
                                 <TextBlock Text="Actions" Style="{StaticResource SectionStyle}" />
                                 <StackPanel Style="{StaticResource FlatRowStyle}" Spacing="2">
                                     <TextBlock Text="Click a card" Style="{StaticResource RowTitleStyle}" />
-                                    <TextBlock Text="Bring to the front; the app that was in front moves to the side." Style="{StaticResource RowNoteStyle}"
-                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="Bring to the front; the app that was in front moves to the side."
+                                               Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource FlatRowStyle}" Spacing="2">
                                     <TextBlock Text="Shift + click" Style="{StaticResource RowTitleStyle}" />
@@ -1046,11 +1041,11 @@
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource FlatRowStyle}" Spacing="2">
                                     <TextBlock Text="Close or quit" Style="{StaticResource RowTitleStyle}" />
-                                    <TextBlock Text="All put-away windows are restored." Style="{StaticResource RowNoteStyle}" TextWrapping="Wrap" />
+                                    <TextBlock Text="All put-away windows are restored." Style="{StaticResource RowNoteStyle}"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>
-
                         <!-- Widgets: on or off, what the glass shows -->
                         <StackPanel x:Name="SideWidgets" Style="{StaticResource InspectorPageStyle}" Visibility="Collapsed">
                             <StackPanel>
@@ -1091,10 +1086,8 @@
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
-
             <!-- Errors: a quiet banner over the workspace's top -->
             <InfoBar x:Name="Status" IsOpen="False" IsClosable="True" MaxWidth="760" Margin="32,12,32,0" VerticalAlignment="Top" />
-
         </Grid>
     </Grid>
 </Window>

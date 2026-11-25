@@ -1,3 +1,4 @@
+// Single-frame Windows.Graphics.Capture fallback for window snapshots.
 #pragma once
 
 #include <windows.h>

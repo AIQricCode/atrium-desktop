@@ -59,8 +59,16 @@ public:
 
     void Refresh(); // asynchronous
     std::vector<TrayIcon> Icons() const;
-    bool Loaded() const;
-    bool Available() const; // the shell's tray was found in the last read
+    bool Loaded() const
+    {
+        std::lock_guard g(mutex_);
+        return loaded_;
+    }
+    bool Available() const // the shell's tray was found in the last read
+    {
+        std::lock_guard g(mutex_);
+        return available_;
+    }
     // A left click (Invoke) or a right click (the context menu) on `icon`.
     void Click(const TrayIcon& icon, bool right, RECT cell = {});
     void DoubleClick(const TrayIcon& icon, bool continuation = false, RECT cell = {});

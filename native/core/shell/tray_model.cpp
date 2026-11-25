@@ -979,11 +979,10 @@ TrayIcon BuildHostedIcon(const HostIcon& h, const tray::HostedEntry& entry, cons
                          InkCache& newInk)
 {
     static const tray::ShellSession kHostShell{1, 1, 1};
-    const std::wstring exe = !h.exe.empty() ? h.exe : (fb ? fb->exe : std::wstring{});
-    TrayIcon t{entry.tip, exe, h.image, h.imageVersion};
+    TrayIcon t{entry.tip, !h.exe.empty() ? h.exe : (fb ? fb->exe : std::wstring{}), h.image, h.imageVersion};
     t.hostKey = h.key, t.pid = h.pid, t.appTooltip = h.version >= 4 && !h.showTip, t.flashing = h.flashUntil > GetTickCount64();
-    t.order = fb && fb->order != SIZE_MAX ? fb->order : order.contains(L"exe:" + exe) ? order.at(L"exe:" + exe) : SIZE_MAX;
-    for (const auto& k : {L"uid:" + exe + L"|" + std::to_wstring(h.uid), h.key})
+    t.order = fb && fb->order != SIZE_MAX ? fb->order : order.contains(L"exe:" + t.exe) ? order.at(L"exe:" + t.exe) : SIZE_MAX;
+    for (const auto& k : {L"uid:" + t.exe + L"|" + std::to_wstring(h.uid), h.key})
         if (auto o = order.find(k); o != order.end())
             t.order = o->second;
     if (t.tip.empty())
@@ -1052,12 +1051,12 @@ std::map<std::wstring, size_t> BuildWindowsOrder(const std::vector<Record>& reco
     return out;
 }
 
-const wchar_t* ActionName(tray::Action action)
+const wchar_t* ActionName(tray::Action a)
 {
-    return action == tray::Action::Right              ? L"right" :
-           action == tray::Action::Double             ? L"double" :
-           action == tray::Action::DoubleContinuation ? L"double-continuation" :
-                                                        L"left";
+    return a == tray::Action::Right              ? L"right" :
+           a == tray::Action::Double             ? L"double" :
+           a == tray::Action::DoubleContinuation ? L"double-continuation" :
+                                                   L"left";
 }
 
 void LogTrayRefresh(bool changed, size_t iconCount, int recognised, bool ordered, const std::vector<Found>& buttons, const std::vector<Record>& records,
@@ -1266,17 +1265,6 @@ std::vector<TrayIcon> TrayModel::Icons() const
         }
     }
     return InWindowsOrder(std::move(out));
-}
-
-bool TrayModel::Loaded() const
-{
-    std::lock_guard g(mutex_);
-    return loaded_;
-}
-bool TrayModel::Available() const
-{
-    std::lock_guard g(mutex_);
-    return available_;
 }
 
 namespace {

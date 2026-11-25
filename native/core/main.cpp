@@ -528,10 +528,8 @@ void ApplyDesktopAndSystemSettings(const Settings& s)
     g_app.stage->SetAutoHide(s.stageAutoHide);
     g_app.stage->SetMinimizeToStrip(s.stageMinimize);
     g_app.stage->SetDragMerge(s.stageDragMerge);
-    g_app.stage->SetExcluded(s.stageExcluded);
-    SetUserGames(s.stageExcluded);
-    g_app.stage->SetCloseButton(s.stageCloseButton);
-    g_app.stage->SetScrollWrap(s.stageScrollWrap);
+    g_app.stage->SetExcluded(s.stageExcluded), SetUserGames(s.stageExcluded);
+    g_app.stage->SetCloseButton(s.stageCloseButton), g_app.stage->SetScrollWrap(s.stageScrollWrap);
     g_app.stage->SetAvoid(s.stageAvoid);
     g_app.stage->SetEnabled(s.stageManager);
     g_app.genie->SetEnabled(s.genieMinimize && s.bar);
@@ -1071,11 +1069,8 @@ LRESULT CALLBACK HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         return 0;
     case WM_CATALOG:
-        if (g_app.start && g_app.extras) {
-            const bool listChanged = (w == 0);
-            g_app.start->Refresh(listChanged);
-            g_app.extras->OnCatalogChanged(listChanged);
-        }
+        if (g_app.start && g_app.extras)
+            g_app.start->Refresh(w == 0), g_app.extras->OnCatalogChanged(w == 0);
         return 0;
     case WM_VOLUME: UpdateStatus(); return 0;
     case WM_STATUS: {

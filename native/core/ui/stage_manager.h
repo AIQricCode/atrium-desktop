@@ -155,6 +155,8 @@ private:
     static constexpr ULONGLONG kPendingMs = 1200;
     static constexpr double kFlightMs = 400;
     static constexpr float kBoxW = 172, kBoxH = 112, kTilt = 22;
+    static constexpr int kLargeOld = 1440;
+    static constexpr size_t kLargeKept = 4;
 
     static bool Transient(HWND h);
     static void SetTransitions(HWND h, bool on);

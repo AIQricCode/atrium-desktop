@@ -83,8 +83,8 @@ bool TestRapidLossYieldPolicy()
             return false;
         }
     }
-    if (policy.OnExplorerFirst(t, newlyYielded) || !newlyYielded || policy.Reason() != TrayHostYieldReason::RapidLoss ||
-        policy.retryAt != t + 10000 || policy.backoffStep != 1) {
+    if (policy.OnExplorerFirst(t, newlyYielded) || !newlyYielded || policy.Reason() != TrayHostYieldReason::RapidLoss || policy.retryAt != t + 10000 ||
+        policy.backoffStep != 1) {
         std::fprintf(stderr, "FAIL: 6th sampled loss should trigger 10s RapidLoss backoff\n");
         return false;
     }
@@ -107,8 +107,8 @@ bool TestRapidLossYieldPolicy()
         }
     }
     t += 400;
-    if (policy.OnExplorerFirst(t, newlyYielded) || !newlyYielded || policy.Reason() != TrayHostYieldReason::RapidLoss ||
-        policy.retryAt != t + 30000 || policy.backoffStep != 2) {
+    if (policy.OnExplorerFirst(t, newlyYielded) || !newlyYielded || policy.Reason() != TrayHostYieldReason::RapidLoss || policy.retryAt != t + 30000 ||
+        policy.backoffStep != 2) {
         std::fprintf(stderr, "FAIL: cycle 2 should escalate to 30s backoff\n");
         return false;
     }

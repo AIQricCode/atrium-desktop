@@ -200,8 +200,9 @@ void Launchpad::Refresh(bool listChanged)
             return;
         }
         auto apps = LaunchableApps();
-        const bool changed = apps.size() != apps_.size() || !std::equal(apps.begin(), apps.end(), apps_.begin(),
-                                                                        [](const CatalogApp& a, const CatalogApp& b) { return a.id == b.id && a.name == b.name; });
+        const bool changed = apps.size() != apps_.size() || !std::equal(apps.begin(), apps.end(), apps_.begin(), [](const CatalogApp& a, const CatalogApp& b) {
+                                 return a.id == b.id && a.name == b.name;
+                             });
         if (changed) {
             apps_ = std::move(apps);
             Split();

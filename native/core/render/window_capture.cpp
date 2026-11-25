@@ -75,8 +75,7 @@ bool ComputeWindowCrop(HWND window, int maxW, int maxH, int& x, int& y, int& w, 
         return false;
     RECT win{}, frame{};
     if (!GetWindowRect(window, &win) || win.right <= win.left || win.bottom <= win.top ||
-        FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) ||
-        frame.right <= frame.left || frame.bottom <= frame.top) {
+        FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) || frame.right <= frame.left || frame.bottom <= frame.top) {
         x = 0;
         y = 0;
         w = maxW;
@@ -139,8 +138,7 @@ bool WindowFrameCapturer::EnsureDevice(HRESULT* hrOut)
     ResetDevice();
     HRESULT hr = E_FAIL;
     for (const D3D_DRIVER_TYPE driver : {D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP}) {
-        hr = D3D11CreateDevice(nullptr, driver, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
-                               &d3dDevice_, nullptr, &d3dContext_);
+        hr = D3D11CreateDevice(nullptr, driver, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION, &d3dDevice_, nullptr, &d3dContext_);
         if (SUCCEEDED(hr))
             break;
     }

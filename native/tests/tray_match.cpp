@@ -210,8 +210,8 @@ void TestElevatedGuidAndConcatenatedTips()
     Check(mergedSeg.hostedFallback[0] == 0 && mergedSeg.hostedFallback[1] == 1 && mergedSeg.extraExplorer.empty(),
           "T2: Win11 concatenated multi-segment tooltips pair and claim unknown in Tier 5");
 
-    const auto mergedShort = MergeHostedIcons({{L"hwnd:1:1", L"", L"Open", L"", L"", 1, true, 1}},
-                                              {{L"", L"c:\\other\\other.exe", L"Tray - Open; Ready", false}});
+    const auto mergedShort =
+        MergeHostedIcons({{L"hwnd:1:1", L"", L"Open", L"", L"", 1, true, 1}}, {{L"", L"c:\\other\\other.exe", L"Tray - Open; Ready", false}});
     Check(mergedShort.hostedFallback[0] == kNone, "T2: empty-exe short 4-char ASCII tip does not mispair in Tier 5");
 
     std::vector<HostedEntry> hostedCode{

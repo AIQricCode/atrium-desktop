@@ -186,8 +186,8 @@ WindowPicture BuildPictures(HWND window, const uint8_t* src, int pw, int ph, int
     return result;
 }
 
-WindowPicture TryPrintWindow(HWND window, const RECT& win, const RECT& frame, int maxWidth, int maxHeight, float radius, int largeMax,
-                             WindowPicture* large, bool& printed, DWORD& pwErr)
+WindowPicture TryPrintWindow(HWND window, const RECT& win, const RECT& frame, int maxWidth, int maxHeight, float radius, int largeMax, WindowPicture* large,
+                             bool& printed, DWORD& pwErr)
 {
     const int ww = win.right - win.left, wh = win.bottom - win.top;
     BITMAPINFO bi{};
@@ -266,8 +266,7 @@ WindowPicture Capture(HWND window, int maxWidth, int maxHeight, float radius, in
     HRESULT wgcHr = S_OK;
     if (capturer.Capture(window, stopEvent, 180, wgcFrame, &wgcHr) && wgcFrame.width > 0 && wgcFrame.height > 0 &&
         !Blank(wgcFrame.bgra.data(), wgcFrame.width, wgcFrame.height, wgcFrame.width * 4)) {
-        return BuildPictures(window, wgcFrame.bgra.data(), wgcFrame.width, wgcFrame.height, wgcFrame.width * 4, maxWidth, maxHeight, radius, largeMax,
-                             large);
+        return BuildPictures(window, wgcFrame.bgra.data(), wgcFrame.width, wgcFrame.height, wgcFrame.width * 4, maxWidth, maxHeight, radius, largeMax, large);
     }
     if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
         return {};
@@ -319,7 +318,10 @@ WindowPicture PlaceholderPicture(const IconImage& icon, int width, int height, b
 }
 
 WindowSnapshots::WindowSnapshots(HWND notify, UINT message)
-    : notify_(notify), message_(message), stopEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr)), worker_([this] { Worker(); })
+    : notify_(notify),
+      message_(message),
+      stopEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+      worker_([this] { Worker(); })
 {
 }
 

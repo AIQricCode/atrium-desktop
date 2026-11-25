@@ -71,9 +71,9 @@ struct SecondaryBackdropDecision {
 // only updates immediately when the capture's copied bounds cover the panel,
 // otherwise keeps pendingFresh set and falls back after `fallbackTimeoutMs`
 // when no backdrop has been seeded yet so WM_GLASS_READY cannot starve.
-inline SecondaryBackdropDecision SecondaryPanelBackdropReady(bool partialCopy, RECT copyBounds, RECT panelRect, RECT monitorBounds, int padPx,
-                                                             bool hasTexture, bool fresh, bool moved, bool hasBackdrop, bool pendingFresh,
-                                                             double uncoveredElapsedMs, double fallbackTimeoutMs = kSecondaryUncoveredFallbackMs)
+inline SecondaryBackdropDecision SecondaryPanelBackdropReady(bool partialCopy, RECT copyBounds, RECT panelRect, RECT monitorBounds, int padPx, bool hasTexture,
+                                                             bool fresh, bool moved, bool hasBackdrop, bool pendingFresh, double uncoveredElapsedMs,
+                                                             double fallbackTimeoutMs = kSecondaryUncoveredFallbackMs)
 {
     const bool covered = !partialCopy || CopyBoundsCoverPanels(copyBounds, {panelRect}, monitorBounds, padPx);
     if (covered) {

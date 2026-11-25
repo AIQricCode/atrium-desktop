@@ -14,10 +14,7 @@ namespace atrium {
 
 inline constexpr wchar_t kStartMenuHiddenHead = 1; // the heading of the hidden apps, after Z
 
-inline int StartMenuLetterRank(wchar_t letter)
-{
-    return letter == L'#' ? 0 : letter >= L'A' && letter <= L'Z' ? letter - L'A' + 1 : 27;
-}
+inline int StartMenuLetterRank(wchar_t letter) { return letter == L'#' ? 0 : letter >= L'A' && letter <= L'Z' ? letter - L'A' + 1 : 27; }
 
 inline bool CompareStartMenuAppNames(const std::wstring& a, const std::wstring& b)
 {
@@ -25,7 +22,7 @@ inline bool CompareStartMenuAppNames(const std::wstring& a, const std::wstring& 
                            nullptr, 0) == CSTR_LESS_THAN;
 }
 
-template <typename RowT, typename TileT, typename IsHiddenFn>
+template<typename RowT, typename TileT, typename IsHiddenFn>
 std::vector<RowT> BuildStartMenuAllAppsRows(const std::vector<TileT>& tiles, const std::vector<CatalogApp>& apps, IsHiddenFn&& isHidden)
 {
     // Every app and folder under its letter (# first, as in Windows), by name within it.

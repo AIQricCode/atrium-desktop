@@ -132,11 +132,7 @@ public sealed partial class MainWindow : Window, IDisposable
 #if ATRIUM_DEVELOPMENT
             ExportStageArtIfAsked();
 #endif
-            if (!_windowLoaded)
-            {
-                _windowLoaded = true;
-                ActivateCurrentPageAfterLoad();
-            }
+            if (!_windowLoaded) { _windowLoaded = true; ActivateCurrentPageAfterLoad(); }
         };
         ExtendsContentIntoTitleBar = true;
         if (AppWindowTitleBar.IsCustomizationSupported())
@@ -710,15 +706,7 @@ public sealed partial class MainWindow : Window, IDisposable
         TintPicker.Color = TintColor(CurrentSettings.Tint);
         ShowTint();
         _loading = false;
-        if (_windowLoaded)
-        {
-            UpdateHero();
-            UpdateCustomSwatch();
-            if (_page == 3) ShowNotifyPreview(false);
-            if (_page == 4) ShowWidgetMap();
-            if (_page == 5) ShowStagePreview(false);
-            if (_page >= 10) ShowModulePreview(_page);
-        }
+        RefreshLoadedPreviews(true);
     }
 
     private static Color TintColor(uint rgb) => Color.FromArgb(255, (byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
@@ -1013,13 +1001,6 @@ public sealed partial class MainWindow : Window, IDisposable
         Changed();
     }
 
-    private void OnStageScrollWrapToggled(object sender, RoutedEventArgs e)
-    {
-        if (_loading) return;
-        CurrentSettings.StageScrollWrap = StageScrollWrapSwitch.IsOn;
-        Changed();
-    }
-
     private void OnStageDragMergeToggled(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
@@ -1138,14 +1119,7 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         _session.MarkEdited();
         UpdateButtons();
-        if (_windowLoaded)
-        {
-            UpdateHero();
-            UpdateCustomSwatch();
-            if (_page == 3) ShowNotifyPreview(false);
-            if (_page == 5) StageRenderGlass(StageCanvas.Width, StageCanvas.Height); // the material changed
-            if (_page >= 10) ShowModulePreview(_page);
-        }
+        RefreshLoadedPreviews(false);
         SchedulePreview();
     }
 

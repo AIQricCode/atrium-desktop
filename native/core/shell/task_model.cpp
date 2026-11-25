@@ -1320,24 +1320,7 @@ struct TaskModel::Impl {
         const TaskItem* t = Find(key);
         auto windows = t ? t->windows : std::vector<HWND>{};
         std::erase_if(windows, [](HWND h) { return !IsWindowVisible(h); });
-        if (monitor) {
-            const HMONITOR primary = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
-            std::erase_if(windows, [&](HWND h) {
-                if (MonitorFromWindow(h, MONITOR_DEFAULTTONULL) != nullptr)
-                    return !OffscreenBelongsToMonitor(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), nullptr, monitor, primary);
-                HMONITOR normalMon = nullptr;
-                WINDOWPLACEMENT wp{sizeof(wp)};
-                MONITORINFO mi{sizeof(mi)};
-                if (GetWindowPlacement(h, &wp) && GetMonitorInfoW(primary, &mi)) {
-                    const LONG ox = mi.rcWork.left - mi.rcMonitor.left, oy = mi.rcWork.top - mi.rcMonitor.top;
-                    RECT sr{wp.rcNormalPosition.left + ox, wp.rcNormalPosition.top + oy, wp.rcNormalPosition.right + ox,
-                            wp.rcNormalPosition.bottom + oy};
-                    if (sr.right > sr.left && sr.bottom > sr.top && MonitorFromRect(&sr, MONITOR_DEFAULTTONULL) != nullptr)
-                        normalMon = MonitorFromRect(&sr, MONITOR_DEFAULTTONEAREST);
-                }
-                return !OffscreenBelongsToMonitor(nullptr, normalMon, monitor, primary);
-            });
-        }
+        FilterWindowsToMonitor(windows, monitor);
         if (windows.empty()) {
             Launch(key);
             return;

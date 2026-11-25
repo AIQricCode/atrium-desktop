@@ -55,8 +55,7 @@ public:
         } else {
             const size_t clamped = size_t(std::clamp<long long>(static_cast<long long>(offset_) + move, 0, static_cast<long long>(maxOffset)));
             // Discard fractional overflow pushed into a clamped end so reversing responds on the next notch.
-            if ((clamped == 0 && (horizontal ? remainder < 0 : remainder > 0)) ||
-                (clamped == maxOffset && (horizontal ? remainder > 0 : remainder < 0)))
+            if ((clamped == 0 && (horizontal ? remainder < 0 : remainder > 0)) || (clamped == maxOffset && (horizontal ? remainder > 0 : remainder < 0)))
                 remainder = 0;
             offset_ = clamped;
         }
