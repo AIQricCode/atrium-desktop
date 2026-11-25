@@ -6,6 +6,7 @@
 #include "bar.h"
 #include "bar_edge.h"
 #include "render/capture.h"
+#include "render/shutdown_wait.h"
 #include "clock.h"
 #include "desktop_helpers.h"
 #include "extras_host.h"
@@ -769,16 +770,11 @@ void SyncDisplayBars(const Settings& settings, bool refresh, bool workAreaOnly)
         CloseBarPopups();
     for (const auto& bar : retired)
         g_app.extras->OnBarRetiring(bar.get());
-    std::ranges::for_each(retired, [](const auto& bar) {
-        bar->SetVisible(false);
-        bar->DetachInput();
-    });
-    for (auto& bar : retired)
-        if (!bar->StopRendering(5000)) {
-            Log(L"core: secondary display renderer slow during removal; draining");
-            g_app.drainingBars.push_back(std::move(bar));
-        }
-    retired.clear();
+    std::ranges::for_each(retired, [](const auto& bar) { bar->SetVisible(false), bar->DetachInput(), bar->SignalStopRendering(); });
+    const size_t beforeSlow = g_app.drainingBars.size();
+    CollectSlowWithinDeadline(retired, g_app.drainingBars, 200, [](const auto& bar, DWORD ms) { return bar->WaitStopRendering(ms); });
+    if (g_app.drainingBars.size() > beforeSlow)
+        Log(L"core: %zu secondary display renderer(s) slow during removal; draining", g_app.drainingBars.size() - beforeSlow);
     if (all)
         for (const DisplayInfo& display : displays) {
             if (display.primary || std::ranges::any_of(g_app.secondaryBars, [&](const auto& bar) { return bar->DisplayOverride() == display.id; }))
@@ -997,7 +993,7 @@ bool HandleHostTimer(HWND h, WPARAM w)
     if (w == kReadyTimer)
         return TrySignalReadyEvent(h), true;
     if (w == kStatusTimer) {
-        std::erase_if(g_app.drainingBars, [](const auto& bar) { return bar->StopRendering(0); });
+        std::erase_if(g_app.drainingBars, [](const auto& bar) { return bar->WaitStopRendering(0); });
         if (!g_app.trayAdded)
             AddTrayIcon();
         if (g_app.guard && WaitForSingleObject(g_app.guard, 0) == WAIT_OBJECT_0) {
@@ -1379,9 +1375,12 @@ void ShutdownApp(HANDLE mutex, std::thread& startupThread)
     g_app.imeWatcher.reset();
     g_app.status.reset();
     g_app.preview->Close();
-    bool renderingStopped = true;
-    ForBars([&](Bar& bar) { renderingStopped &= bar.StopRendering(3000); });
-    std::ranges::for_each(g_app.drainingBars, [&](const auto& bar) { renderingStopped &= bar->StopRendering(3000); });
+    std::vector<Bar*> stopBars;
+    ForBars([&](Bar& bar) { stopBars.push_back(&bar); });
+    for (const auto& bar : g_app.drainingBars)
+        stopBars.push_back(bar.get());
+    const bool renderingStopped =
+        StopWithinDeadline(stopBars, 3000, [](Bar* bar) { bar->SignalStopRendering(); }, [](Bar* bar, DWORD ms) { return bar->WaitStopRendering(ms); });
     if (!renderingStopped) {
         g_app.chrome.reset();
         Log(L"core: exited (render thread stuck)");

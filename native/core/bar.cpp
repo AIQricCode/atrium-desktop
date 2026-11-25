@@ -189,9 +189,14 @@ void Bar::DetachInput()
         UpdateAppBar(nullptr, RECT{}, 0);
 }
 
-bool Bar::StopRendering(DWORD timeoutMs)
+void Bar::SignalStopRendering()
 {
-    SetEvent(quit_);
+    if (quit_)
+        SetEvent(quit_);
+}
+
+bool Bar::WaitStopRendering(DWORD timeoutMs)
+{
     if (!render_.joinable())
         return true;
     // The render thread may wait for this thread (ShowOwnWindowsToCapture, DirectComposition):
@@ -202,6 +207,12 @@ bool Bar::StopRendering(DWORD timeoutMs)
     }
     render_.join();
     return true;
+}
+
+bool Bar::StopRendering(DWORD timeoutMs)
+{
+    SignalStopRendering();
+    return WaitStopRendering(timeoutMs);
 }
 
 LRESULT CALLBACK Bar::VisualProc(HWND h, UINT m, WPARAM w, LPARAM l)

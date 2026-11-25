@@ -106,7 +106,7 @@ private:
         std::vector<uint8_t> pixels;
     };
     // Shared with the worker: it asks Explorer, which may not answer, so the render thread
-    // may leave without it; the worker ends when its call returns.
+    // retires it without waiting and joins it once finished.
     struct Wallpaper {
         explicit Wallpaper(HANDLE frameEvent);
         Wallpaper(const Wallpaper&) = delete;
@@ -116,10 +116,16 @@ private:
         std::mutex lock;
         std::unique_ptr<Picture> picture; // new, not yet taken
     };
+    struct RetiredWorker {
+        std::shared_ptr<Wallpaper> state;
+        std::thread thread;
+    };
+    void ReclaimRetired();
     std::unique_ptr<Picture> TakePicture(); // the worker's newest, if there is one
     static void WallpaperLoop(Wallpaper& work); // worker
     std::shared_ptr<Wallpaper> wallpaper_;
     std::thread worker_;
+    std::vector<RetiredWorker> retired_;
 };
 
 // The glass's backdrop in remote-control mode (setting remoteVisible): the wallpaper under one

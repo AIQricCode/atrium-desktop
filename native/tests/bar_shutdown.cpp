@@ -164,6 +164,98 @@ bool TestSyncSendMessageAndTimeout(HWND hwnd, WindowState& state)
            Require(!state.otherHandled && otherQueued, "WaitRenderShutdown timeout must leave queued unrelated message intact");
 }
 
+bool TestSharedShutdownDeadline(HWND hwnd)
+{
+    struct Worker {
+        HANDLE quit = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        HANDLE unblock = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        bool signaledFirst = false;
+        std::thread thread;
+    };
+    std::vector<std::unique_ptr<Worker>> workers;
+    for (int i = 0; i < 3; ++i) {
+        auto w = std::make_unique<Worker>();
+        if (!Require(w->quit != nullptr && w->unblock != nullptr, "CreateEventW must succeed"))
+            return false;
+        w->thread = std::thread([q = w->quit, u = w->unblock, i] {
+            if (i < 2) {
+                WaitForSingleObject(q, 5000);
+            } else {
+                HANDLE hs[] = {u};
+                WaitForMultipleObjects(1, hs, FALSE, 5000);
+            }
+        });
+        workers.push_back(std::move(w));
+    }
+    const ULONGLONG t0 = GetTickCount64();
+    const bool stopped = StopWithinDeadline(
+        workers, 140,
+        [](const auto& w) {
+            w->signaledFirst = true;
+            SetEvent(w->quit);
+        },
+        [hwnd](const auto& w, DWORD ms) {
+            if (!WaitRenderShutdown(w->thread.native_handle(), hwnd, kCaptureMsg, ms))
+                return false;
+            if (w->thread.joinable())
+                w->thread.join();
+            return true;
+        });
+    const ULONGLONG elapsed = GetTickCount64() - t0;
+    const bool allSignaled = workers[0]->signaledFirst && workers[1]->signaledFirst && workers[2]->signaledFirst;
+    const bool firstTwoJoined = !workers[0]->thread.joinable() && !workers[1]->thread.joinable();
+    SetEvent(workers[2]->unblock);
+    if (workers[2]->thread.joinable())
+        workers[2]->thread.join();
+    for (auto& w : workers) {
+        CloseHandle(w->quit);
+        CloseHandle(w->unblock);
+    }
+    return Require(!stopped && allSignaled && firstTwoJoined && elapsed < 320,
+                   "StopWithinDeadline must signal all workers upfront and bound total wait to one deadline");
+}
+
+bool TestCollectSlowRetirement()
+{
+    struct FakeBar {
+        HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        bool slow = false;
+        std::thread thread;
+    };
+    HANDLE hold = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!Require(hold != nullptr, "CreateEventW(hold) must succeed"))
+        return false;
+    std::vector<std::unique_ptr<FakeBar>> retired, draining;
+    for (int i = 0; i < 2; ++i) {
+        auto b = std::make_unique<FakeBar>();
+        b->slow = (i == 1);
+        b->thread = std::thread([d = b->done, hold, slow = b->slow] {
+            if (slow)
+                WaitForSingleObject(hold, 5000);
+            SetEvent(d);
+        });
+        retired.push_back(std::move(b));
+    }
+    const ULONGLONG t0 = GetTickCount64();
+    CollectSlowWithinDeadline(retired, draining, 80, [](const auto& b, DWORD ms) {
+        if (WaitForSingleObject(b->done, ms) != WAIT_OBJECT_0)
+            return false;
+        b->thread.join();
+        return true;
+    });
+    const ULONGLONG dt = GetTickCount64() - t0;
+    SetEvent(hold);
+    const bool ok = Require(retired.empty() && draining.size() == 1 && draining[0]->slow && dt < 250,
+                            "CollectSlowWithinDeadline must move only slow bars into draining within shared budget");
+    for (auto& b : draining) {
+        if (b->thread.joinable())
+            b->thread.join();
+        CloseHandle(b->done);
+    }
+    CloseHandle(hold);
+    return ok;
+}
+
 } // namespace
 
 int main()
@@ -191,7 +283,8 @@ int main()
     WindowState state{ack};
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&state));
 
-    const bool ok = TestWaitCaptureAckOrQuit() && TestPreserveQuitAndFilterMessages(hwnd, state) && TestSyncSendMessageAndTimeout(hwnd, state);
+    const bool ok = TestWaitCaptureAckOrQuit() && TestPreserveQuitAndFilterMessages(hwnd, state) && TestSyncSendMessageAndTimeout(hwnd, state) &&
+                    TestSharedShutdownDeadline(hwnd) && TestCollectSlowRetirement();
 
     DestroyWindow(hwnd);
     CloseHandle(ack);

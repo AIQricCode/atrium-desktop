@@ -100,8 +100,11 @@ public:
     bool Seen() const { return visible_ && !tucked_; } // on screen, not tucked away
     // Glass layers of popup windows (GlassHost).
     void SetPanel(const GlassPanel& panel) override;
-    // Stops the render thread, pumping this (UI) thread's messages meanwhile, before the popups and
-    // widgets it draws for go. False if it did not stop within `timeoutMs` (a stuck driver call).
+    // Signals the render thread to stop without waiting.
+    void SignalStopRendering();
+    // Waits (at most `timeoutMs`) for a signaled render thread while pumping UI messages.
+    bool WaitStopRendering(DWORD timeoutMs);
+    // Signals and waits for the render thread, pumping this (UI) thread's messages meanwhile.
     bool StopRendering(DWORD timeoutMs);
     // Unhooks stacking WinEvent hooks, kills input timers, and tears down any AppBar registration
     // before retiring/draining a bar.

@@ -159,10 +159,24 @@ DesktopBackdrop::~DesktopBackdrop()
 {
     StopCapture();
     StopWallpaper();
+    std::vector<HANDLE> pending;
+    pending.reserve(retired_.size());
+    for (const auto& r : retired_) {
+        SetEvent(r.state->stop);
+        if (r.state->done)
+            pending.push_back(r.state->done);
+    }
+    if (!pending.empty())
+        WaitForMultipleObjects(DWORD(pending.size()), pending.data(), TRUE, 250);
+    ReclaimRetired();
+    for (auto& r : retired_)
+        if (r.thread.joinable())
+            r.thread.detach();
 }
 
 void DesktopBackdrop::Update(const std::wstring& mode)
 {
+    ReclaimRetired();
     const std::wstring want = mode == L"wallpaper" || mode == L"off" ? mode : L"desktop";
     if (want != mode_) {
         StopCapture();
@@ -187,7 +201,7 @@ void DesktopBackdrop::Update(const std::wstring& mode)
             } else {
                 if (wasStarting && !starting_ && retryMs_ < ClockMs())
                     retryMs_ = ClockMs() + kRetryMs; // it failed: again in a while
-                if (!worker_.joinable())
+                if (!wallpaper_)
                     StartWallpaper(); // meanwhile, the wallpaper files
             }
         }
@@ -387,14 +401,29 @@ DesktopBackdrop::Wallpaper::~Wallpaper()
             CloseHandle(h);
 }
 
+void DesktopBackdrop::ReclaimRetired()
+{
+    for (auto it = retired_.begin(); it != retired_.end();) {
+        if (WaitForSingleObject(it->state->done, 0) == WAIT_OBJECT_0) {
+            if (it->thread.joinable())
+                it->thread.join();
+            it = retired_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void DesktopBackdrop::StartWallpaper()
 {
-    if (wallpaper_)
+    ReclaimRetired();
+    if (wallpaper_ || !retired_.empty())
         return;
     wallpaper_ = std::make_shared<Wallpaper>(frameEvent_);
     worker_ = std::thread([work = wallpaper_] {
         WallpaperLoop(*work);
         SetEvent(work->done);
+        SetEvent(work->wake);
     });
     Log(L"render: widgets' backdrop: the wallpaper");
 }
@@ -409,16 +438,15 @@ std::unique_ptr<DesktopBackdrop::Picture> DesktopBackdrop::TakePicture()
 
 void DesktopBackdrop::StopWallpaper()
 {
+    ReclaimRetired();
     if (!wallpaper_)
         return;
     SetEvent(wallpaper_->stop);
-    if (WaitForSingleObject(wallpaper_->done, 1000) == WAIT_OBJECT_0) {
-        worker_.join();
-    } else {
-        Log(L"render: the wallpaper worker waits on Explorer; it ends on its own");
-        worker_.detach();
+    {
+        std::lock_guard g(wallpaper_->lock);
+        wallpaper_->picture.reset();
     }
-    wallpaper_.reset();
+    retired_.push_back({std::move(wallpaper_), std::move(worker_)});
 }
 
 void DesktopBackdrop::WallpaperLoop(Wallpaper& work)
