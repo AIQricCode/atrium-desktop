@@ -129,6 +129,7 @@ add_library(atrium_core_lib STATIC
     render/ime_glyph.cpp
     render/hover_wave.cpp
     render/capture.cpp
+    render/window_capture.cpp
     render/desktop_backdrop.cpp
     render/glass_renderer.cpp
     render/glass_panel.cpp

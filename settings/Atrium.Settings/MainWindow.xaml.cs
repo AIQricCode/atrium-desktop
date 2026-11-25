@@ -95,6 +95,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly FrameworkElement[] _mains = [];
     private readonly FrameworkElement?[] _sides = [];
     private int _page;
+    private bool _windowLoaded;
     private bool _folded; // a narrow window: the inspector's groups under the workspace
     private int _flashId;
     private bool _updatingCoreSwitch, _coreChanging = true;
@@ -126,12 +127,17 @@ public sealed partial class MainWindow : Window, IDisposable
         {
             Loc.Localize(RootGrid);
             Loc.Localize(InspectorStack);
-        };
-        RootGrid.Loaded += (_, _) => ContinuousCorners.Install(RootGrid);
-        RootGrid.Loaded += (_, _) => LoadStageArt(); // the Stage Manager page's pictures, ready before it opens
+            ContinuousCorners.Install(RootGrid);
+            LoadStageArt(); // the Stage Manager page's pictures, ready before it opens
 #if ATRIUM_DEVELOPMENT
-        RootGrid.Loaded += (_, _) => ExportStageArtIfAsked();
+            ExportStageArtIfAsked();
 #endif
+            if (!_windowLoaded)
+            {
+                _windowLoaded = true;
+                ActivateCurrentPageAfterLoad();
+            }
+        };
         ExtendsContentIntoTitleBar = true;
         if (AppWindowTitleBar.IsCustomizationSupported())
             AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
@@ -203,6 +209,7 @@ public sealed partial class MainWindow : Window, IDisposable
         InitHero();
         PhotoChanged += () =>
         {
+            if (!_windowLoaded) return;
             if (_page == 4) { ShowWidgetMap(); RefreshGallery(); }
             if (_page == 3) ShowNotifyPreview(false);
             if (_page == 5) ShowStagePreview(false);
@@ -671,6 +678,7 @@ public sealed partial class MainWindow : Window, IDisposable
         StageMinimizeSwitch.IsOn = CurrentSettings.StageMinimize;
         StageDragMergeSwitch.IsOn = CurrentSettings.StageDragMerge;
         StageCloseButtonSwitch.IsOn = CurrentSettings.StageCloseButton;
+        StageScrollWrapSwitch.IsOn = CurrentSettings.StageScrollWrap;
         StageAvoidSwitch.IsOn = CurrentSettings.StageAvoid;
         RebuildExcluded();
         (CurrentSettings.WidgetBackdrop == "wallpaper" ? BackdropWallpaper : BackdropDesktop).IsChecked = true;
@@ -702,12 +710,15 @@ public sealed partial class MainWindow : Window, IDisposable
         TintPicker.Color = TintColor(CurrentSettings.Tint);
         ShowTint();
         _loading = false;
-        UpdateHero();
-        UpdateCustomSwatch();
-        if (_page == 3) ShowNotifyPreview(false);
-        if (_page == 4) ShowWidgetMap();
-        if (_page == 5) ShowStagePreview(false);
-        if (_page >= 10) ShowModulePreview(_page);
+        if (_windowLoaded)
+        {
+            UpdateHero();
+            UpdateCustomSwatch();
+            if (_page == 3) ShowNotifyPreview(false);
+            if (_page == 4) ShowWidgetMap();
+            if (_page == 5) ShowStagePreview(false);
+            if (_page >= 10) ShowModulePreview(_page);
+        }
     }
 
     private static Color TintColor(uint rgb) => Color.FromArgb(255, (byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
@@ -1002,6 +1013,13 @@ public sealed partial class MainWindow : Window, IDisposable
         Changed();
     }
 
+    private void OnStageScrollWrapToggled(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        CurrentSettings.StageScrollWrap = StageScrollWrapSwitch.IsOn;
+        Changed();
+    }
+
     private void OnStageDragMergeToggled(object sender, RoutedEventArgs e)
     {
         if (_loading) return;
@@ -1120,11 +1138,14 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         _session.MarkEdited();
         UpdateButtons();
-        UpdateHero();
-        UpdateCustomSwatch();
-        if (_page == 3) ShowNotifyPreview(false);
-        if (_page == 5) StageRenderGlass(StageCanvas.Width, StageCanvas.Height); // the material changed
-        if (_page >= 10) ShowModulePreview(_page);
+        if (_windowLoaded)
+        {
+            UpdateHero();
+            UpdateCustomSwatch();
+            if (_page == 3) ShowNotifyPreview(false);
+            if (_page == 5) StageRenderGlass(StageCanvas.Width, StageCanvas.Height); // the material changed
+            if (_page >= 10) ShowModulePreview(_page);
+        }
         SchedulePreview();
     }
 

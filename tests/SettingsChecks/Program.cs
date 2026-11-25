@@ -80,6 +80,13 @@ var closeOff = BarSettings.FromJson(JsonNode.Parse("""{"stageCloseButton":false}
 Require(new BarSettings().StageCloseButton && !closeOff.StageCloseButton && !BarSettings.FromJson(closeOff.ToJson(), new()).StageCloseButton &&
         !new BarSettings().SameAs(closeOff),
     "The Stage Manager cards' close button is on by default, and off survives a round trip.");
+var scrollWrapOff = BarSettings.FromJson(JsonNode.Parse("""{"stageScrollWrap":false}""")!.AsObject(), new());
+Require(new BarSettings().StageScrollWrap && BarSettings.FromJson([], new()).StageScrollWrap &&
+        !scrollWrapOff.StageScrollWrap && !BarSettings.FromJson(scrollWrapOff.ToJson(), new()).StageScrollWrap &&
+        !BarSettings.FromJson([], scrollWrapOff).StageScrollWrap &&
+        !BarSettings.FromJson(JsonNode.Parse("""{"stageScrollWrap":"bad"}""")!.AsObject(), scrollWrapOff).StageScrollWrap &&
+        !new BarSettings().SameAs(scrollWrapOff),
+    "Stage Manager strip scroll wrap is on by default, and off survives round trips, partial updates, and malformed values.");
 var dragMergeOff = BarSettings.FromJson(JsonNode.Parse("""{"stageDragMerge":false}""")!.AsObject(), new());
 Require(!dragMergeOff.StageDragMerge && !BarSettings.FromJson(dragMergeOff.ToJson(), new()).StageDragMerge &&
         !BarSettings.FromJson([], dragMergeOff).StageDragMerge &&

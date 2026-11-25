@@ -287,6 +287,16 @@ void StageManager::SetAutoHide(bool autoHide)
         Watch();
 }
 
+void StageManager::SetScrollWrap(bool on)
+{
+    if (on == scrollWrap_)
+        return;
+    scrollWrap_ = on;
+    scroll_.SetWrap(on);
+    scroll_.Fit(scrollCount_, size_t(Capacity()));
+    Rebuild(false);
+}
+
 void StageManager::SetMinimizeToStrip(bool on)
 {
     if (on == minimizeToStrip_)
@@ -504,7 +514,7 @@ void StageManager::Park(HWND window, const std::wstring& key)
         PutDown(window, true);
         return;
     }
-    RequestPicture(window);
+    RequestPicture(window, true);
     SetTimer(surface_.Hwnd(), kDownTimer, kDownMs, nullptr);
 }
 
@@ -533,18 +543,22 @@ void StageManager::Foresee()
         for (HWND h : t.windows) {
             if (parked_.contains(h) || !IsWindowVisible(h) || IsIconic(h) || !OnMonitor(h, monitor_))
                 continue;
-            if (auto p = pictures_.find(h); p != pictures_.end() && now - p->second.taken < kFreshMs / 2)
-                continue;
+            if (auto p = pictures_.find(h); p != pictures_.end()) {
+                const bool hasPicture = p->second.picture && p->second.picture->ok;
+                const ULONGLONG minAge = hasPicture ? kFreshMs / 2 : StagePictureRetryMs(p->second.misses);
+                if (now - p->second.taken < minAge)
+                    continue;
+            }
             pictures_[h].taken = now; // asked for: not again meanwhile
             RequestPicture(h);
         }
     }
 }
 
-void StageManager::RequestPicture(HWND window)
+void StageManager::RequestPicture(HWND window, bool urgent)
 {
     const float s = PopupScale(WorkArea());
-    snapshots_.Request(window, int(kBoxW * kPictureScale * s), int(kBoxH * kPictureScale * s), kPictureRadius * kPictureScale * s, kLargeMax);
+    snapshots_.Request(window, int(kBoxW * kPictureScale * s), int(kBoxH * kPictureScale * s), kPictureRadius * kPictureScale * s, kLargeMax, urgent);
 }
 
 void StageManager::SetLarge(Flight& f)
@@ -1065,16 +1079,17 @@ void StageManager::Rebuild(bool keepAnchor)
 {
     std::vector<Entry> next = BuildStripEntries();
     scrollCount_ = next.size();
-    scroll_.Fit(scrollCount_);
+    const size_t cap = size_t(Capacity());
+    scroll_.Fit(scrollCount_, cap);
     if (keepAnchor && !entries_.empty()) {
         auto anchor = std::ranges::find_if(next, [&](const Entry& e) { return e.keys == entries_.front().keys; });
         if (anchor != next.end())
-            scroll_.Anchor(size_t(anchor - next.begin()), scrollCount_);
+            scroll_.Anchor(size_t(anchor - next.begin()), scrollCount_, cap);
     }
     if (!next.empty())
         std::ranges::rotate(next, next.begin() + scroll_.Offset());
-    if (next.size() > size_t(Capacity()))
-        next.resize(size_t(Capacity()));
+    if (next.size() > cap)
+        next.resize(cap);
     // An index can now name another group. Check identity before the old keys are moved/cleared.
     auto sameSlot = [&](int index) {
         return index >= 0 && size_t(index) < next.size() && size_t(index) < entries_.size() && next[size_t(index)].keys == entries_[size_t(index)].keys;
@@ -1501,7 +1516,7 @@ bool StageManager::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
         if (!shown_ || EntryAt(content) < 0)
             return false;
         pressed_ = -1;
-        if (scroll_.Wheel(GET_WHEEL_DELTA_WPARAM(w), m == WM_MOUSEHWHEEL, scrollCount_)) {
+        if (scroll_.Wheel(GET_WHEEL_DELTA_WPARAM(w), m == WM_MOUSEHWHEEL, scrollCount_, size_t(Capacity()))) {
             // An explicit scroll changes the anchor; model-only rebuilds keep it.
             hover_ = -1;
             Rebuild(false);

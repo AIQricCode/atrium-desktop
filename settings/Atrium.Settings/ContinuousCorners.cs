@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.Graphics.Canvas.Geometry;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
@@ -500,6 +501,15 @@ public sealed partial class ContinuousCorners : DependencyObject
             _maskBytes -= first.Value.Bytes;
             Masks.Remove(first.Key);
         }
+
+        var surface = LoadMaskAsync(key, size);
+        Masks.Add(key, (bytes, surface));
+        _maskBytes += bytes;
+        return surface;
+    }
+
+    private static async Task<byte[]> EncodeMaskPngAsync(MaskKey key, int size)
+    {
         byte[] pixels = new byte[size * size * 4];
         for (int y = 0; y < size; ++y)
         {
@@ -517,22 +527,31 @@ public sealed partial class ContinuousCorners : DependencyObject
             }
         }
 
-        var surface = LoadPixelsAsync((uint)size, (uint)size, pixels);
-        Masks.Add(key, (bytes, surface));
-        _maskBytes += bytes;
-        return surface;
+        using var stream = new InMemoryRandomAccessStream();
+        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream).AsTask().ConfigureAwait(false);
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, (uint)size, (uint)size, 96, 96, pixels);
+        await encoder.FlushAsync().AsTask().ConfigureAwait(false);
+        stream.Seek(0);
+        byte[] png = new byte[(int)stream.Size];
+        using var read = stream.AsStreamForRead();
+        await read.ReadExactlyAsync(png).ConfigureAwait(false);
+        return png;
     }
 
-    private static async Task<LoadedImageSurface> LoadPixelsAsync(uint width, uint height, byte[] pixels)
+    private static async Task<LoadedImageSurface> LoadMaskAsync(MaskKey key, int size)
     {
+        byte[] png = await Task.Run(() => EncodeMaskPngAsync(key, size));
         using var stream = new InMemoryRandomAccessStream();
-        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
-        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, width, height, 96, 96, pixels);
-        await encoder.FlushAsync();
+        await stream.WriteAsync(png.AsBuffer());
         stream.Seek(0);
         var surface = LoadedImageSurface.StartLoadFromStream(stream);
         var loaded = new TaskCompletionSource();
-        surface.LoadCompleted += (_, _) => loaded.TrySetResult();
+        void OnLoaded(LoadedImageSurface s, LoadedImageSourceLoadCompletedEventArgs _)
+        {
+            s.LoadCompleted -= OnLoaded;
+            loaded.TrySetResult();
+        }
+        surface.LoadCompleted += OnLoaded;
         await loaded.Task;
         return surface;
     }

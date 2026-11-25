@@ -24,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace atrium::detail {
@@ -413,6 +414,60 @@ bool SendTaskSysCommand(HWND h, WPARAM command)
     return false;
 }
 
+namespace {
+
+void RestoreOffscreenWindowIfNeeded(HWND h)
+{
+    RECT wr{};
+    if (!GetWindowRect(h, &wr) || MonitorFromRect(&wr, MONITOR_DEFAULTTONULL) != nullptr)
+        return;
+    WINDOWPLACEMENT wp{sizeof(wp)};
+    if (!GetWindowPlacement(h, &wp))
+        return;
+    if (wp.showCmd == SW_SHOWMINIMIZED || wp.showCmd == SW_MINIMIZE) {
+        if (IsWindowEnabled(h))
+            SendTaskSysCommand(h, SC_RESTORE);
+        else
+            ShowWindowAsync(h, SW_RESTORE);
+        if (!GetWindowRect(h, &wr) || MonitorFromRect(&wr, MONITOR_DEFAULTTONULL) != nullptr)
+            return;
+        if (!GetWindowPlacement(h, &wp))
+            return;
+    }
+    std::vector<MonitorBounds> monitors;
+    EnumDisplayMonitors(
+        nullptr, nullptr,
+        [](HMONITOR hm, HDC, LPRECT, LPARAM data) -> BOOL {
+            MONITORINFO mi{sizeof(mi)};
+            if (GetMonitorInfoW(hm, &mi))
+                reinterpret_cast<std::vector<MonitorBounds>*>(data)->push_back({mi.rcMonitor, mi.rcWork});
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&monitors));
+    MONITORINFO primaryInfo{sizeof(primaryInfo)};
+    if (!GetMonitorInfoW(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY), &primaryInfo))
+        return;
+    const OffscreenRestorePlan plan =
+        ComputeOffscreenRestorePlan(wr, wp.rcNormalPosition, wp.flags, monitors, {primaryInfo.rcMonitor, primaryInfo.rcWork});
+    if (!plan.shouldRestore)
+        return;
+    wp.flags |= WPF_ASYNCWINDOWPLACEMENT;
+    wp.showCmd = plan.showCmd;
+    wp.rcNormalPosition = plan.workspaceRect;
+    if (!SetWindowPlacement(h, &wp)) {
+        const DWORD err = GetLastError();
+        static std::unordered_set<HWND> loggedFailed;
+        if (loggedFailed.size() >= 64)
+            loggedFailed.clear();
+        if (loggedFailed.insert(h).second)
+            Log(L"tasks: SetWindowPlacement failed for off-screen window 0x%p (%lu)", static_cast<void*>(h), err);
+    }
+    if (GetWindowRect(h, &wr) && MonitorFromRect(&wr, MONITOR_DEFAULTTONULL) == nullptr)
+        ShowWindowAsync(h, SW_RESTORE);
+}
+
+} // namespace
+
 void RaiseTaskWindow(HWND h, HWND ui, UINT restoreMsg, const std::function<void(HWND)>& deferActivate, const std::function<bool(HWND)>& isPending)
 {
     const bool onUi = ui && GetWindowThreadProcessId(ui, nullptr) == GetCurrentThreadId();
@@ -444,6 +499,7 @@ void RaiseTaskWindow(HWND h, HWND ui, UINT restoreMsg, const std::function<void(
             return;
         }
     }
+    RestoreOffscreenWindowIfNeeded(h);
     const bool ownerEnabled = IsWindowEnabled(h) != FALSE;
     auto candidate = [](HWND w) -> ActivationCandidate { return {w, w && IsWindowVisible(w) != FALSE, w && IsWindowEnabled(w) != FALSE}; };
     const HWND enabledPopup = ownerEnabled ? nullptr : GetWindow(h, GW_ENABLEDPOPUP);

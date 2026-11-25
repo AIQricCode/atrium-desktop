@@ -82,6 +82,7 @@ public:
     void SetDragMerge(bool on);
     void SetAvoid(bool on) { avoid_ = on; } // stageAvoid: a window taking the stage over the strip moves beside it
     void SetCloseButton(bool on); // stageCloseButton: a card under the pointer shows a cross that closes its windows
+    void SetScrollWrap(bool on);  // stageScrollWrap: scrolling the strip wraps past the last card back to the first
     // A window coming back from the strip will fill this monitor (maximized): the bar may go at once.
     std::function<void(HMONITOR)> onCoverSoon;
     void MoveSize(HWND window, bool start) { start ? BeginDrag(window) : FinishDrag(window); } // EVENT_SYSTEM_MOVESIZESTART/END
@@ -185,7 +186,7 @@ private:
     bool NeedsAdopt(ULONGLONG now) const;
     void UnparkDirect(HWND h, bool showQuietly, ULONGLONG now);
     void KeepPicture();        // a picture of the window in front, ready for when it is minimized
-    void RequestPicture(HWND window);
+    void RequestPicture(HWND window, bool urgent = false);
     void SetLarge(Flight& f);  // the flight's large picture, if the window has one
     bool Beside(RECT& frame) const { return enabled_ && avoid_ && !autoHide_ && !IsRectEmpty(&rect_) && StageBesideRect(frame, Zone(), WorkArea(), onRight_); }
     void MoveBeside(HWND window);   // the window beside the strip (minimized: where it comes back)
@@ -309,7 +310,8 @@ private:
     Surface flight_; // over the whole screen while pictures fly
     WindowSnapshots snapshots_;
     winrt::com_ptr<IVirtualDesktopManager> desktops_; // the strip shows the current virtual desktop's windows
-    bool enabled_ = false, onRight_ = false, autoHide_ = false, minimizeToStrip_ = false, dragMerge_ = true, closeButton_ = true, avoid_ = true;
+    bool enabled_ = false, onRight_ = false, autoHide_ = false, minimizeToStrip_ = false, dragMerge_ = true, closeButton_ = true, scrollWrap_ = true,
+         avoid_ = true;
     int closeHot_ = -1, closePressed_ = -1; // the card whose close button is under the pointer, pressed
     BarEdge barEdge_ = BarEdge::Bottom;
     std::unordered_map<HWND, RECT> up_; // the stage's windows up on this screen at the last look, and where (px)

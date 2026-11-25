@@ -42,12 +42,15 @@ const wchar_t* YieldReasonName(TrayHostYieldReason reason);
 // Every Shell_TrayWnd in z-order with its program, logged when that changes (#146).
 void LogShellTrayWindows();
 
+inline bool ShouldYieldToStartAllBack(bool hasModule, bool disabledForCurrentUser) { return hasModule && !disabledForCurrentUser; }
+
 struct TrayHostYieldPolicy {
     static constexpr ULONGLONG kLossWindowMs = 5000;
     static constexpr ULONGLONG kRapidBackoffMs = 60000;
     static constexpr int kRapidLossLimit = 6;
 
     DWORD shellPid = 0;
+    bool hasStartAllBackModule = false;
     bool hasStartAllBack = false;
     ULONGLONG lossWindowStart = 0;
     ULONGLONG retryAt = 0;
@@ -57,18 +60,40 @@ struct TrayHostYieldPolicy {
     bool Yielded() const { return reason != TrayHostYieldReason::None; }
     TrayHostYieldReason Reason() const { return reason; }
 
-    bool OnShellPid(DWORD pid, bool startAllBack)
+    bool OnShellPid(DWORD pid, bool hasModule, bool disabledForCurrentUser)
     {
         if (pid == shellPid)
             return false;
         shellPid = pid;
-        hasStartAllBack = startAllBack;
+        hasStartAllBackModule = hasModule;
+        const bool active = ShouldYieldToStartAllBack(hasModule, disabledForCurrentUser);
+        hasStartAllBack = active;
         lossWindowStart = 0;
         retryAt = 0;
         rapidLosses = 0;
         const bool wasYielded = Yielded();
-        reason = startAllBack ? TrayHostYieldReason::StartAllBack : TrayHostYieldReason::None;
-        return wasYielded && !startAllBack;
+        reason = active ? TrayHostYieldReason::StartAllBack : TrayHostYieldReason::None;
+        return wasYielded && !active;
+    }
+
+    bool OnShellPid(DWORD pid, bool startAllBack) { return OnShellPid(pid, startAllBack, false); }
+
+    bool OnStartAllBackActive(bool active)
+    {
+        if (active == hasStartAllBack)
+            return false;
+        hasStartAllBack = active;
+        lossWindowStart = 0;
+        retryAt = 0;
+        rapidLosses = 0;
+        if (active) {
+            reason = TrayHostYieldReason::StartAllBack;
+            return false;
+        }
+        const bool cleared = (reason == TrayHostYieldReason::StartAllBack);
+        if (cleared)
+            reason = TrayHostYieldReason::None;
+        return cleared;
     }
 
     bool OnFirst()

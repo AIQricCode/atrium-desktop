@@ -122,21 +122,21 @@ DWORD ShellPid() { return PidOf(GetShellWindow()); }
 
 bool HasStartAllBackModule(DWORD shellPid)
 {
-    if (!shellPid)
-        return false;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, shellPid);
+    HANDLE snap = shellPid ? CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, shellPid) : INVALID_HANDLE_VALUE;
     if (snap == INVALID_HANDLE_VALUE)
         return false;
     bool found = false;
     MODULEENTRY32W me{sizeof(me)};
-    for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me)) {
-        if (_wcsnicmp(me.szModule, L"StartAllBack", 12) == 0 || _wcsnicmp(me.szModule, L"StartIsBack", 11) == 0) {
-            found = true;
-            break;
-        }
-    }
-    CloseHandle(snap);
-    return found;
+    for (BOOL ok = Module32FirstW(snap, &me); ok && !found; ok = Module32NextW(snap, &me))
+        found = _wcsnicmp(me.szModule, L"StartAllBack", 12) == 0 || _wcsnicmp(me.szModule, L"StartIsBack", 11) == 0;
+    return CloseHandle(snap), found;
+}
+
+bool StartAllBackDisabled()
+{
+    DWORD disabled = 0, size = sizeof(disabled);
+    return RegGetValueW(HKEY_CURRENT_USER, L"Software\\StartIsBack", L"Disabled", RRF_RT_REG_DWORD, nullptr, &disabled, &size) == ERROR_SUCCESS &&
+           disabled != 0;
 }
 
 const wchar_t* Name(DWORD message)
@@ -567,8 +567,13 @@ void TrayHost::KeepFirst()
         SetPropW(w, kTaskband, band);
     const DWORD shellPid = ShellPid();
     const bool wasYieldedBefore = yielded_.load();
-    if (shellPid != yieldPolicy_.shellPid && yieldPolicy_.OnShellPid(shellPid, HasStartAllBackModule(shellPid)))
+    if (shellPid != yieldPolicy_.shellPid) {
+        if (yieldPolicy_.OnShellPid(shellPid, HasStartAllBackModule(shellPid), StartAllBackDisabled()))
+            yielded_ = false, dirty_ = true;
+    } else if (yieldPolicy_.hasStartAllBackModule && yieldPolicy_.OnStartAllBackActive(ShouldYieldToStartAllBack(true, StartAllBackDisabled()))) {
         yielded_ = false, dirty_ = true;
+        Log(L"tray host: StartAllBack disabled for current user; resuming");
+    }
     HWND first = FindWindowW(L"Shell_TrayWnd", nullptr);
     if (yieldPolicy_.hasStartAllBack) {
         yielded_ = true;

@@ -131,6 +131,7 @@ struct Settings {
     bool stageDragMerge = true;      // a window released over a group in the strip joins it
     bool stageAvoid = true;          // always shown, a window taking the stage over the strip moves beside it
     bool stageCloseButton = true;    // a card in the strip shows a close button (its top right) under the pointer
+    bool stageScrollWrap = true;     // scrolling the strip wraps past the last card back to the first
     // Apps Stage Manager leaves alone: their windows are never put away. Defaults cover the
     // screenshot tools whose own overlay/control bar must stay on screen while recording.
     std::vector<std::wstring> stageExcluded = DefaultStageExcluded();

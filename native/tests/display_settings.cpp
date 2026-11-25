@@ -164,6 +164,11 @@ void CheckStageDragMerge()
     Require(defaults.stageCloseButton && Settings::FromJson(LR"({})", Settings{}, parsed) && parsed.stageCloseButton, "stageCloseButton is on by default");
     off.stageCloseButton = false;
     Require(Settings::FromJson(off.ToJson(), Settings{}, parsed) && !parsed.stageCloseButton, "disabled stageCloseButton survives saving");
+    Require(defaults.stageScrollWrap && Settings::FromJson(LR"({})", Settings{}, parsed) && parsed.stageScrollWrap, "stageScrollWrap is on by default");
+    off.stageScrollWrap = false;
+    Require(Settings::FromJson(off.ToJson(), Settings{}, parsed) && !parsed.stageScrollWrap, "disabled stageScrollWrap survives saving");
+    Require(Settings::FromJson(LR"({})", off, parsed) && !parsed.stageScrollWrap, "partial updates retain disabled stageScrollWrap");
+    Require(Settings::FromJson(LR"({"stageScrollWrap":"bad"})", off, parsed) && !parsed.stageScrollWrap, "malformed stageScrollWrap retains fallback");
 }
 
 void CheckSettingsNormalization()

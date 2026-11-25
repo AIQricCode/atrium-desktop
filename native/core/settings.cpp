@@ -123,6 +123,7 @@ void ReadModuleSettingsJson(const json::JsonObject& o, Settings& s)
     flag(L"stageDragMerge", s.stageDragMerge);
     flag(L"stageAvoid", s.stageAvoid);
     flag(L"stageCloseButton", s.stageCloseButton);
+    flag(L"stageScrollWrap", s.stageScrollWrap);
     flag(L"hideTaskbar", s.hideTaskbar);
     flag(L"genieMinimize", s.genieMinimize);
     flag(L"windowPeek", s.windowPeek);
@@ -385,6 +386,7 @@ void WriteSystemJson(const json::JsonObject& o, const Settings& s)
     flag(L"stageDragMerge", s.stageDragMerge);
     flag(L"stageAvoid", s.stageAvoid);
     flag(L"stageCloseButton", s.stageCloseButton);
+    flag(L"stageScrollWrap", s.stageScrollWrap);
     WriteStringArrayJson(o, L"stageExcluded", s.stageExcluded);
     flag(L"hideTaskbar", s.hideTaskbar);
     flag(L"genieMinimize", s.genieMinimize);

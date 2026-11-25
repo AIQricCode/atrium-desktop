@@ -60,6 +60,7 @@ public sealed partial class MainWindow
 
     private void ShowNotifyPreview(bool animate)
     {
+        if (!_windowLoaded) return;
         if (ContinuousCorners.Original(NotifyStage) is not ImageBrush) NotifyStage.Background = PhotoBrush();
         var s = CurrentSettings;
         double radius = Math.Min(Math.Clamp(s.CornerRadius, 8, Math.Max(8, s.Height / 2)), CardH / 2);
@@ -254,7 +255,7 @@ public sealed partial class MainWindow
 
     private void OnNotifyStageSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_page == 3 && Math.Abs(e.NewSize.Width - e.PreviousSize.Width) + Math.Abs(e.NewSize.Height - e.PreviousSize.Height) > 0.5) ShowNotifyPreview(false);
+        if (_windowLoaded && _page == 3 && Math.Abs(e.NewSize.Width - e.PreviousSize.Width) + Math.Abs(e.NewSize.Height - e.PreviousSize.Height) > 0.5) ShowNotifyPreview(false);
     }
 
     private void OnReplayNotify(object sender, RoutedEventArgs e) => ReplayNotify();
@@ -398,7 +399,7 @@ public sealed partial class MainWindow
 
     private void OnWidgetStageSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 0.5) ShowWidgetMap();
+        if (_windowLoaded && _page == 4 && Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 0.5) ShowWidgetMap();
     }
 
     // A widget on the map: where it is in the core's grid, its card (its glass and its face), and
@@ -562,6 +563,7 @@ public sealed partial class MainWindow
 
     private void ShowWidgetMap()
     {
+        if (!_windowLoaded) return;
         if (_widgetWatcher == null && Directory.Exists(Path.GetDirectoryName(WidgetsPath)))
         {
             // The core rewrites the file when a widget is moved, resized, added or removed.

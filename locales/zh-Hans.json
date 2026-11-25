@@ -1041,6 +1041,8 @@
   "Windows avoid the strip": "窗口避开台前调度",
   "A window coming to the front over the cards moves beside them. Off, it stays where it is and the cards step aside.": "窗口到前面时如果挡住侧边卡片，会移到卡片旁边。关闭后窗口位置不变，由卡片让开。",
   "A cross at the top right of a group in the strip closes its windows.": "指针停在侧边的一组窗口上时，右上角出现叉号，点它关闭这一组的窗口。",
+  "Loop card scrolling": "循环滚动卡片",
+  "Wrap past the last card back to the first when scrolling the strip.": "滚动侧边卡片列表到末尾时，继续循环回到第一张。",
   "Enable hibernation and hibernate": "启用休眠并休眠",
   "Hibernation cancelled": "已取消休眠",
   "Administrator permission is required to enable hibernation.": "启用休眠需要管理员权限。",

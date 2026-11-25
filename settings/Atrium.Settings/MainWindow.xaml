@@ -1023,6 +1023,9 @@
                                 <local:ToggleTile x:Name="StageCloseButtonSwitch" Title="Close button on the cards" SwitchName="Close button on the cards"
                                                   Note="A cross at the top right of a group in the strip closes its windows."
                                                   Toggled="OnStageCloseButtonToggled" Flat="True" />
+                                <local:ToggleTile x:Name="StageScrollWrapSwitch" Title="Loop card scrolling" SwitchName="Loop card scrolling"
+                                                  Note="Wrap past the last card back to the first when scrolling the strip."
+                                                  Toggled="OnStageScrollWrapToggled" Flat="True" />
                             </StackPanel>
                             <StackPanel>
                                 <TextBlock Text="Actions" Style="{StaticResource SectionStyle}" />

@@ -48,7 +48,7 @@ public:
 
     // Pictures `window` at most maxWidth x maxHeight px, corners of `radius` px; with largeMax, also
     // a large one (at most largeMax px either way, the window's own corners, no shadow).
-    void Request(HWND window, int maxWidth, int maxHeight, float radius, int largeMax = 0);
+    void Request(HWND window, int maxWidth, int maxHeight, float radius, int largeMax = 0, bool urgent = false);
     struct Result {
         HWND window;
         WindowPicture picture;
@@ -72,6 +72,7 @@ private:
     HWND notify_ = nullptr;
     UINT message_ = 0;
     bool stop_ = false;
+    HANDLE stopEvent_ = nullptr;
     std::thread worker_;
 };
 

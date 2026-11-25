@@ -33,6 +33,21 @@ public sealed partial class MainWindow
             _mains[i].Visibility = i == index ? Visibility.Visible : Visibility.Collapsed;
             if (_sides[i] is { } side) side.Visibility = i == index ? Visibility.Visible : Visibility.Collapsed;
         }
+        PageTitle.Text = PageTitles[index];
+        HeroBlock.Visibility = index < 3 ? Visibility.Visible : Visibility.Collapsed;
+        LoupeToggle.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
+        Loupe.Visibility = index == 0 && LoupeSwitch.IsOn ? Visibility.Visible : Visibility.Collapsed;
+        // The design page reads wider than a settings page.
+        CenterStack.MaxWidth = _mains[index] == DesignStack ? 1280 : 1120;
+        ArrangeInspector();
+        if (!_windowLoaded) return;
+        ActivatePageAfterLoad(index);
+    }
+
+    private void ActivateCurrentPageAfterLoad() => ActivatePageAfterLoad(_page);
+
+    private void ActivatePageAfterLoad(int index)
+    {
         if (_mains[index] == DesignStack)
         {
             BuildDesignPage();
@@ -54,14 +69,7 @@ public sealed partial class MainWindow
         if (_mains[index] == MainDisplays) RefreshDisplays();
         if (index >= 10) EnterModulePage(index);
         else LeaveModulePages();
-        PageTitle.Text = PageTitles[index];
         ContinuousCorners.Install(_mains[index]);
-        HeroBlock.Visibility = index < 3 ? Visibility.Visible : Visibility.Collapsed;
-        LoupeToggle.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
-        Loupe.Visibility = index == 0 && LoupeSwitch.IsOn ? Visibility.Visible : Visibility.Collapsed;
-        // The design page reads wider than a settings page.
-        CenterStack.MaxWidth = _mains[index] == DesignStack ? 1280 : 1120;
-        ArrangeInspector();
         // Pages and the inspector are created/reparented lazily; translate the
         // one being shown now, so a language switch does not wait for a restart.
         Loc.Localize(_mains[index]);

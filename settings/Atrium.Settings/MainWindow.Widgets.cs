@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Runtime.InteropServices.WindowsRuntime;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -88,11 +89,13 @@ public sealed partial class MainWindow
         public bool? DarkInk;
         public long Stamp;
         public string? Material;
+        public BarSettings? RenderedMaterial;
+        public int RenderedGen = -1;
     }
 
     private readonly List<GalleryPreview> _galleryStages = [];
-    private BarSettings? _galleryMaterial;
-    private int _galleryGen = -1;
+    private readonly Queue<Action> _galleryApplyQueue = [];
+    private bool _galleryApplyScheduled;
 
     private Button GalleryCard(WidgetChoice c)
     {
@@ -144,12 +147,17 @@ public sealed partial class MainWindow
     // The gallery again when the picture or the material changed since it was drawn.
     private void RefreshGallery()
     {
-        if (_galleryMaterial != null && _galleryMaterial.SameMaterial(CurrentSettings) &&
-            _galleryMaterial.WidgetMaterial == CurrentSettings.WidgetMaterial && _galleryGen == Photo.Generation)
+        foreach (var preview in _galleryStages)
         {
-            return;
+            if (preview.RenderedMaterial != null &&
+                preview.RenderedMaterial.SameMaterial(CurrentSettings) &&
+                preview.RenderedMaterial.WidgetMaterial == CurrentSettings.WidgetMaterial &&
+                preview.RenderedGen == Photo.Generation)
+            {
+                continue;
+            }
+            RenderGalleryCard(preview);
         }
-        foreach (var preview in _galleryStages) RenderGalleryCard(preview);
     }
 
     private void RenderGalleryCard(GalleryPreview preview)
@@ -157,14 +165,16 @@ public sealed partial class MainWindow
         var (c, stage, face, viewport) = preview;
         double sw = stage.ActualWidth, sh = stage.ActualHeight;
         if (sw < 8 || sh < 8) return;
-        _galleryMaterial = CurrentSettings.Clone();
-        _galleryGen = Photo.Generation;
+        preview.RenderedMaterial = CurrentSettings.Clone();
+        preview.RenderedGen = Photo.Generation;
         // The widget fitted into the card, 14 DIP of air around.
         var (w, h) = WidgetFaces.Size(c.Size);
         double k = Math.Min((sw - 28) / w, (sh - 28) / h);
         var tile = new GlassTile((sw - w * k) / 2, (sh - h * k) / 2, w * k, h * k, 22 * k);
-        PostTiles(stage, sw, sh, k, [tile], null, frame =>
+        int mine = 0;
+        mine = PostTiles(stage, sw, sh, k, [tile], null, frame => EnqueueGalleryApply(() =>
         {
+            if (_tilesStopped || !_tileRequests.TryGetValue(stage, out int current) || current != mine) return;
             frame.Apply(stage);
             viewport.Width = sw;
             viewport.Height = sh;
@@ -183,7 +193,37 @@ public sealed partial class MainWindow
             face.Height = tile.H;
             Canvas.SetLeft(face, tile.X);
             Canvas.SetTop(face, tile.Y);
-        });
+        }));
+    }
+
+    private void EnqueueGalleryApply(Action apply)
+    {
+        if (_tilesStopped) return;
+        _galleryApplyQueue.Enqueue(apply);
+        ScheduleGalleryDrain();
+    }
+
+    private void ScheduleGalleryDrain()
+    {
+        if (_galleryApplyScheduled || _tilesStopped || _galleryApplyQueue.Count == 0) return;
+        _galleryApplyScheduled = DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, DrainGalleryApplies);
+    }
+
+    private void DrainGalleryApplies()
+    {
+        _galleryApplyScheduled = false;
+        if (_tilesStopped)
+        {
+            _galleryApplyQueue.Clear();
+            return;
+        }
+        int processed = 0;
+        while (processed < 4 && _galleryApplyQueue.Count > 0 && !_tilesStopped)
+        {
+            _galleryApplyQueue.Dequeue()();
+            processed++;
+        }
+        ScheduleGalleryDrain();
     }
 
     // ---- The widgets' glass on the CPU: the picture, the tiles of glass, their mean brightness ----
@@ -224,24 +264,38 @@ public sealed partial class MainWindow
         }
     }
 
-    private void PostTiles(object target, double w, double h, double k, IReadOnlyList<GlassTile> tiles, GlassTile? bar,
-                           Action<TileFrame> done, bool overlays = false, bool scaled = false)
+    private int PostTiles(object target, double w, double h, double k, IReadOnlyList<GlassTile> tiles, GlassTile? bar,
+                          Action<TileFrame> done, bool overlays = false, bool scaled = false)
     {
         double rs = Math.Clamp(Content.XamlRoot?.RasterizationScale ?? 1, 1, 2);
         int mine = _tileRequests[target] = (_tileRequests.TryGetValue(target, out int n) ? n : 0) + 1;
         lock (_tileLock)
         {
-            if (_tilesStopped) return;
+            if (_tilesStopped) return mine;
             _pendingTiles[target] = new TileJob(target, mine, w, h, k, rs, tiles, bar, CurrentSettings.Clone(), Photo.Capture(), done, overlays, scaled);
-            if (_tilesBusy) return;
+            if (_tilesBusy) return mine;
             _tilesBusy = true;
         }
         Task.Run(RenderTiles);
+        return mine;
     }
 
     private void StopTiles()
     {
         lock (_tileLock) { _tilesStopped = true; _pendingTiles.Clear(); }
+        if (DispatcherQueue.HasThreadAccess)
+        {
+            _galleryApplyQueue.Clear();
+            _galleryApplyScheduled = false;
+        }
+        else
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                _galleryApplyQueue.Clear();
+                _galleryApplyScheduled = false;
+            });
+        }
     }
 
     private void RenderTiles()

@@ -257,4 +257,72 @@ inline int ParseTitleBadge(const std::wstring& title, bool webApp, const std::ws
     return value;
 }
 
+struct MonitorBounds {
+    RECT monitor{};
+    RECT work{};
+};
+
+inline bool RectIntersectsAnyMonitor(const RECT& r, const std::vector<MonitorBounds>& monitors)
+{
+    return std::ranges::any_of(monitors, [&](const MonitorBounds& m) {
+        return std::min(r.right, m.monitor.right) > std::max(r.left, m.monitor.left) &&
+               std::min(r.bottom, m.monitor.bottom) > std::max(r.top, m.monitor.top);
+    });
+}
+
+struct OffscreenRestorePlan {
+    bool shouldRestore = false;
+    RECT workspaceRect{};
+    UINT showCmd = SW_SHOWNORMAL;
+};
+
+// Restores an off-screen non-iconic window (e.g. parked at -32000) to its last valid monitor
+// placement, or centers it in the primary work area when rcNormalPosition is also off-screen (#176).
+inline OffscreenRestorePlan ComputeOffscreenRestorePlan(const RECT& windowRect, const RECT& normalWorkspaceRect, UINT wpFlags,
+                                                        const std::vector<MonitorBounds>& monitors, const MonitorBounds& primary)
+{
+    if (monitors.empty() || RectIntersectsAnyMonitor(windowRect, monitors))
+        return {false, {}, SW_SHOWNORMAL};
+    const UINT showCmd = (wpFlags & WPF_RESTORETOMAXIMIZED) != 0 ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+    const LONG offX = primary.work.left - primary.monitor.left;
+    const LONG offY = primary.work.top - primary.monitor.top;
+    const RECT normalScreen{normalWorkspaceRect.left + offX, normalWorkspaceRect.top + offY, normalWorkspaceRect.right + offX,
+                            normalWorkspaceRect.bottom + offY};
+    const bool validNormal = normalScreen.right > normalScreen.left && normalScreen.bottom > normalScreen.top;
+    const bool normalVisible = validNormal && std::ranges::any_of(monitors, [&](const MonitorBounds& m) {
+                                   const LONG ow = std::min(normalScreen.right, m.monitor.right) - std::max(normalScreen.left, m.monitor.left);
+                                   const LONG oh = std::min(normalScreen.bottom, m.monitor.bottom) - std::max(normalScreen.top, m.monitor.top);
+                                   return ow >= 64 && oh >= 40;
+                               });
+    if (normalVisible)
+        return {true, normalWorkspaceRect, showCmd};
+    LONG w = normalWorkspaceRect.right - normalWorkspaceRect.left;
+    LONG h = normalWorkspaceRect.bottom - normalWorkspaceRect.top;
+    if (w <= 0)
+        w = windowRect.right - windowRect.left;
+    if (h <= 0)
+        h = windowRect.bottom - windowRect.top;
+    if (w <= 0)
+        w = 960;
+    if (h <= 0)
+        h = 640;
+    const LONG primaryWorkW = std::max<LONG>(1, primary.work.right - primary.work.left);
+    const LONG primaryWorkH = std::max<LONG>(1, primary.work.bottom - primary.work.top);
+    w = std::clamp<LONG>(w, 1, primaryWorkW);
+    h = std::clamp<LONG>(h, 1, primaryWorkH);
+    const LONG left = primary.work.left + (primaryWorkW - w) / 2;
+    const LONG top = primary.work.top + (primaryWorkH - h) / 2;
+    return {true, RECT{left - offX, top - offY, left + w - offX, top + h - offY}, showCmd};
+}
+
+inline bool OffscreenBelongsToMonitor(HMONITOR windowNearestMonitor, HMONITOR normalNearestMonitor, HMONITOR targetMonitor,
+                                      HMONITOR primaryMonitor)
+{
+    if (targetMonitor == nullptr)
+        return true;
+    if (windowNearestMonitor != nullptr)
+        return windowNearestMonitor == targetMonitor;
+    return (normalNearestMonitor ? normalNearestMonitor : primaryMonitor) == targetMonitor;
+}
+
 } // namespace atrium

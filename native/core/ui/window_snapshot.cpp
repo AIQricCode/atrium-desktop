@@ -1,9 +1,11 @@
 #include "ui/window_snapshot.h"
 
 #include "log.h"
+#include "render/window_capture.h"
 #include "win32_path.h"
 
 #include <dwmapi.h>
+#include <roapi.h>
 
 #include <algorithm>
 #include <cmath>
@@ -157,21 +159,26 @@ void LogCaptureFailure(std::unordered_set<HWND>& logged, HWND window, const wcha
     Log(L"snapshot: %s for %p err=%lu exe=%s class=%s size=%dx%d", reason, window, err, exe.empty() ? L"?" : exe.c_str(), cls[0] ? cls : L"?", w, h);
 }
 
-WindowPicture Capture(HWND window, int maxWidth, int maxHeight, float radius, int largeMax, WindowPicture* large, std::unordered_set<HWND>& logged)
+WindowPicture BuildPictures(HWND window, const uint8_t* src, int pw, int ph, int stride, int maxWidth, int maxHeight, float radius, int largeMax,
+                            WindowPicture* large)
 {
-    if (!CanPrintWindow(window)) {
-        RECT win{};
-        GetWindowRect(window, &win);
-        LogCaptureFailure(logged, window, L"CanPrintWindow false", win.right - win.left, win.bottom - win.top);
-        return {};
+    const float f = std::min({1.f, float(maxWidth) / float(pw), float(maxHeight) / float(ph)});
+    const int tw = std::max(1, int(std::lround(pw * f))), th = std::max(1, int(std::lround(ph * f)));
+    WindowPicture result = Finish(Shrink(src, pw, ph, stride, tw, th), tw, th, radius);
+    if (largeMax > 0 && large) {
+        // Near the window's own size, with its own corners: where it flies to its place.
+        const float g = std::min(1.f, float(largeMax) / float(std::max(pw, ph)));
+        const int lw = std::max(1, int(std::lround(pw * g))), lh = std::max(1, int(std::lround(ph * g)));
+        const float cr = CornerRadius(window) * g;
+        *large = Finish(Shrink(src, pw, ph, stride, lw, lh), lw, lh, cr, false);
+        large->corner = cr;
     }
-    RECT win{}, frame{};
-    if (!GetWindowRect(window, &win) || win.right <= win.left || win.bottom <= win.top)
-        return {};
-    if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) || frame.right <= frame.left || frame.bottom <= frame.top)
-        frame = win;
-    if (int64_t(win.right) - win.left > 16384 || int64_t(win.bottom) - win.top > 16384)
-        return {};
+    return result;
+}
+
+WindowPicture TryPrintWindow(HWND window, const RECT& win, const RECT& frame, int maxWidth, int maxHeight, float radius, int largeMax,
+                             WindowPicture* large, bool& printed, DWORD& pwErr)
+{
     const int ww = win.right - win.left, wh = win.bottom - win.top;
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -193,13 +200,11 @@ WindowPicture Capture(HWND window, int maxWidth, int maxHeight, float radius, in
     }
     HGDIOBJ old = SelectObject(dc, dib);
     // PW_RENDERFULLCONTENT: what DWM shows, also of windows drawn with the GPU.
-    bool printed = false;
-    if (!CanPrintWindow(window))
-        LogCaptureFailure(logged, window, L"CanPrintWindow false", ww, wh);
-    else if (!PrintWindow(window, dc, 2))
-        LogCaptureFailure(logged, window, L"PrintWindow FALSE", ww, wh, GetLastError());
-    else
-        printed = true;
+    if (CanPrintWindow(window)) {
+        printed = PrintWindow(window, dc, 2) != FALSE;
+        if (!printed)
+            pwErr = GetLastError();
+    }
     GdiFlush();
     WindowPicture result;
     if (printed) {
@@ -209,26 +214,56 @@ WindowPicture Capture(HWND window, int maxWidth, int maxHeight, float radius, in
         const int pw = part.right - part.left, ph = part.bottom - part.top;
         const uint8_t* src = static_cast<const uint8_t*>(bits) + (size_t(part.top) * ww + part.left) * 4;
         // Nothing came (some windows cannot be printed), or one plain colour (a window that has not
-        // drawn itself yet): no picture.
-        if (pw > 0 && ph > 0 && Blank(src, pw, ph, ww * 4)) {
-            LogCaptureFailure(logged, window, L"Blank", pw, ph);
-        } else if (pw > 0 && ph > 0) {
-            const float f = std::min({1.f, float(maxWidth) / float(pw), float(maxHeight) / float(ph)});
-            const int tw = std::max(1, int(std::lround(pw * f))), th = std::max(1, int(std::lround(ph * f)));
-            result = Finish(Shrink(src, pw, ph, ww * 4, tw, th), tw, th, radius);
-            if (largeMax > 0 && large) {
-                // Near the window's own size, with its own corners: where it flies to its place.
-                const float g = std::min(1.f, float(largeMax) / float(std::max(pw, ph)));
-                const int lw = std::max(1, int(std::lround(pw * g))), lh = std::max(1, int(std::lround(ph * g)));
-                *large = Finish(Shrink(src, pw, ph, ww * 4, lw, lh), lw, lh, CornerRadius(window) * g, false);
-                large->corner = CornerRadius(window) * g;
-            }
-        }
+        // drawn itself yet): fall back to Windows.Graphics.Capture.
+        if (pw > 0 && ph > 0 && !Blank(src, pw, ph, ww * 4))
+            result = BuildPictures(window, src, pw, ph, ww * 4, maxWidth, maxHeight, radius, largeMax, large);
     }
     SelectObject(dc, old);
     DeleteObject(dib);
     DeleteDC(dc);
     return result;
+}
+
+WindowPicture Capture(HWND window, int maxWidth, int maxHeight, float radius, int largeMax, WindowPicture* large, std::unordered_set<HWND>& logged,
+                      WindowFrameCapturer& capturer, HANDLE stopEvent)
+{
+    if (!CanPrintWindow(window)) {
+        RECT win{};
+        GetWindowRect(window, &win);
+        LogCaptureFailure(logged, window, L"CanPrintWindow false", win.right - win.left, win.bottom - win.top);
+        return {};
+    }
+    RECT win{}, frame{};
+    if (!GetWindowRect(window, &win) || win.right <= win.left || win.bottom <= win.top)
+        return {};
+    if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame))) || frame.right <= frame.left || frame.bottom <= frame.top)
+        frame = win;
+    if (int64_t(win.right) - win.left > 16384 || int64_t(win.bottom) - win.top > 16384)
+        return {};
+    const int ww = win.right - win.left, wh = win.bottom - win.top;
+    bool printed = false;
+    DWORD pwErr = 0;
+    WindowPicture result = TryPrintWindow(window, win, frame, maxWidth, maxHeight, radius, largeMax, large, printed, pwErr);
+    if (result.ok)
+        return result;
+    if (!CanPrintWindow(window)) {
+        LogCaptureFailure(logged, window, L"CanPrintWindow false", ww, wh);
+        return {};
+    }
+    if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
+        return {};
+    CapturedWindowFrame wgcFrame;
+    HRESULT wgcHr = S_OK;
+    if (capturer.Capture(window, stopEvent, 180, wgcFrame, &wgcHr) && wgcFrame.width > 0 && wgcFrame.height > 0 &&
+        !Blank(wgcFrame.bgra.data(), wgcFrame.width, wgcFrame.height, wgcFrame.width * 4)) {
+        return BuildPictures(window, wgcFrame.bgra.data(), wgcFrame.width, wgcFrame.height, wgcFrame.width * 4, maxWidth, maxHeight, radius, largeMax,
+                             large);
+    }
+    if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
+        return {};
+    const wchar_t* reason = !printed ? L"PrintWindow+WGC failed" : (wgcFrame.width > 0 ? L"Blank (PrintWindow+WGC)" : L"Blank+WGC failed");
+    LogCaptureFailure(logged, window, reason, ww, wh, FAILED(wgcHr) ? static_cast<DWORD>(wgcHr) : pwErr);
+    return {};
 }
 
 } // namespace
@@ -273,28 +308,62 @@ WindowPicture PlaceholderPicture(const IconImage& icon, int width, int height, b
     return Finish(std::move(px), width, height, float(std::max(6, width / 24)));
 }
 
-WindowSnapshots::WindowSnapshots(HWND notify, UINT message) : notify_(notify), message_(message), worker_([this] { Worker(); }) {}
+WindowSnapshots::WindowSnapshots(HWND notify, UINT message)
+    : notify_(notify), message_(message), stopEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr)), worker_([this] { Worker(); })
+{
+}
 
 WindowSnapshots::~WindowSnapshots()
 {
     std::unique_lock lk(lock_);
     stop_ = true;
     lk.unlock();
+    if (stopEvent_)
+        SetEvent(stopEvent_);
     cv_.notify_all();
     if (worker_.joinable())
         worker_.join();
+    if (stopEvent_)
+        CloseHandle(stopEvent_);
 }
 
-void WindowSnapshots::Request(HWND window, int maxWidth, int maxHeight, float radius, int largeMax)
+void WindowSnapshots::Request(HWND window, int maxWidth, int maxHeight, float radius, int largeMax, bool urgent)
 {
     // PrintWindow waits for the window's thread: a hung one would hold the worker and its bitmap for good.
     if (!window || IsIconic(window) || IsHungAppWindow(window))
         return;
     std::unique_lock lk(lock_);
-    if (stop_ || !notify_ || pending_.contains(window) || queue_.size() >= 32)
+    if (stop_ || !notify_)
         return;
+    if (pending_.contains(window)) {
+        if (!urgent)
+            return;
+        for (auto it = queue_.begin(); it != queue_.end(); ++it) {
+            if (it->window == window) {
+                Job job = *it;
+                job.maxWidth = maxWidth;
+                job.maxHeight = maxHeight;
+                job.largeMax = largeMax;
+                job.radius = radius;
+                queue_.erase(it);
+                queue_.push_front(job);
+                break;
+            }
+        }
+        return;
+    }
+    if (!urgent && queue_.size() >= 32)
+        return;
+    if (urgent && queue_.size() >= 32) {
+        pending_.erase(queue_.back().window);
+        queue_.pop_back();
+    }
     pending_.insert(window);
-    queue_.push_back(Job{window, maxWidth, maxHeight, largeMax, radius});
+    const Job job{window, maxWidth, maxHeight, largeMax, radius};
+    if (urgent)
+        queue_.push_front(job);
+    else
+        queue_.push_back(job);
     lk.unlock();
     cv_.notify_one();
 }
@@ -303,25 +372,29 @@ void WindowSnapshots::Worker()
 {
     // Physical px of every monitor, as the window's own picture is.
     SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    const HRESULT roHr = RoInitialize(RO_INIT_MULTITHREADED);
     std::unordered_set<HWND> loggedFailures;
+    WindowFrameCapturer capturer;
     for (;;) {
         Job job{};
         {
             std::unique_lock lk(lock_);
             cv_.wait(lk, [this] { return stop_ || !queue_.empty(); });
             if (stop_)
-                return;
+                break;
             job = queue_.front();
             queue_.pop_front();
         }
-        WindowPicture large, p = Capture(job.window, job.maxWidth, job.maxHeight, job.radius, job.largeMax, &large, loggedFailures);
+        WindowPicture large, p = Capture(job.window, job.maxWidth, job.maxHeight, job.radius, job.largeMax, &large, loggedFailures, capturer, stopEvent_);
         std::lock_guard g(lock_);
         pending_.erase(job.window);
         if (stop_ || !notify_)
-            return;
+            break;
         done_.push_back(Result{job.window, std::move(p), std::move(large)});
         PostMessageW(notify_, message_, 0, 0);
     }
+    if (SUCCEEDED(roHr))
+        RoUninitialize();
 }
 
 std::vector<WindowSnapshots::Result> WindowSnapshots::Take()
