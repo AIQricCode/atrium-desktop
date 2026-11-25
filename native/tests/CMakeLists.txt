@@ -199,3 +199,7 @@ add_test(NAME search_query COMMAND search_query_tests)
 add_executable(panel_capture_crop_tests panel_capture_crop.cpp)
 target_link_libraries(panel_capture_crop_tests PRIVATE atrium_core_lib)
 add_test(NAME panel_capture_crop COMMAND panel_capture_crop_tests)
+
+add_executable(desktop_backdrop_target_tests desktop_backdrop_target.cpp)
+target_link_libraries(desktop_backdrop_target_tests PRIVATE atrium_core_lib)
+add_test(NAME desktop_backdrop_target COMMAND desktop_backdrop_target_tests)

@@ -1,9 +1,11 @@
 // The backdrop of the desktop widgets (D35, D38): the desktop itself, never
 // the windows above it. Two ways:
 //  - "desktop": Windows.Graphics.Capture of Explorer's desktop window
-//    (Progman). A window capture holds the window's own content even where
-//    other windows cover it; frames come only when the desktop changes (a new
-//    wallpaper, a slideshow), so the widgets' glass is drawn again only then;
+//    (Progman on Windows 11 24H2+, or the live-wallpaper WorkerW behind
+//    SHELLDLL_DefView on Windows 10 / 11 23H2 when present). A window capture
+//    holds the window's own content even where other windows cover it; frames
+//    come only when the desktop changes (a new wallpaper, a slideshow), so the
+//    widgets' glass is drawn again only then;
 //  - "wallpaper" (the setting widgetBackdrop, and the fallback): the
 //    wallpaper files laid out as Windows lays them out (IDesktopWallpaper:
 //    fill, fit, stretch, tile, centre, span; the background colour), composed
@@ -49,6 +51,7 @@ public:
     bool ChangedSince(unsigned version, const RECT& area) const;
 
 private:
+    void CheckCaptureTarget();
     bool StartCapture(); // adopts a started capture (see Starting); false while none
     void StopCapture();
     // Starting the capture can block (it never returned on one system: #66, the bar stayed blank),
@@ -61,7 +64,7 @@ private:
         ~Starting();
         HANDLE wake = nullptr; // the frame event, its own copy: the bar may close its handle before the thread ends
         std::mutex lock;
-        bool done = false, ok = false, abandoned = false;
+        bool done = false, ok = false, abandoned = false, isProgman = true;
         HRESULT error = S_OK;
         HWND desktop = nullptr;
         winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
@@ -91,6 +94,9 @@ private:
     // The desktop window's capture.
     HWND desktop_ = nullptr;
     double retryMs_ = 0; // when to try the capture again (Explorer restarting)
+    double targetCheckMs_ = 0;
+    HWND failedWorker_ = nullptr;
+    double failedWorkerUntilMs_ = 0;
     winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice device_{nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item_{nullptr};
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool pool_{nullptr};

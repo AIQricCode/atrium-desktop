@@ -1,8 +1,10 @@
 #include "desktop_backdrop.h"
 
+#include "desktop_backdrop_target.h"
 #include "../log.h"
 #include "../clock.h"
 
+#include <dwmapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <wincodec.h>
@@ -21,7 +23,53 @@ namespace atrium {
 namespace {
 
 constexpr double kRetryMs = 2000;   // the desktop window is gone (Explorer restarting)
+constexpr double kTargetCheckMs = 2000;
+constexpr double kFailedWorkerBackoffMs = 300000.0;
 constexpr DWORD kWallpaperPollMs = 3000;
+
+bool HasVisibleWallpaperChild(HWND parent)
+{
+    for (HWND child = FindWindowExW(parent, nullptr, nullptr, nullptr); child; child = FindWindowExW(parent, child, nullptr, nullptr)) {
+        if (!IsWindowVisible(child))
+            continue;
+        wchar_t cls[32] = {};
+        if (GetClassNameW(child, cls, int(std::size(cls))) && wcscmp(cls, L"SHELLDLL_DefView") == 0)
+            continue;
+        RECT r{};
+        if (GetWindowRect(child, &r) && (r.right - r.left) >= 64 && (r.bottom - r.top) >= 64)
+            return true;
+    }
+    return false;
+}
+
+DesktopBackdropTarget ResolveDesktopBackdropTarget(HWND skipWorker)
+{
+    std::vector<DesktopHostCandidate> candidates;
+    EnumWindows(
+        [](HWND h, LPARAM lp) -> BOOL {
+            wchar_t cls[32] = {};
+            if (!GetClassNameW(h, cls, int(std::size(cls))))
+                return TRUE;
+            const bool isProgman = wcscmp(cls, L"Progman") == 0;
+            if (!isProgman && wcscmp(cls, L"WorkerW") != 0)
+                return TRUE;
+            DesktopHostCandidate c;
+            c.hwnd = h;
+            c.isProgman = isProgman;
+            c.hasDefView = FindWindowExW(h, nullptr, L"SHELLDLL_DefView", nullptr) != nullptr;
+            c.visible = IsWindowVisible(h) != FALSE;
+            BOOL cloaked = FALSE;
+            if (SUCCEEDED(DwmGetWindowAttribute(h, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))))
+                c.cloaked = cloaked != FALSE;
+            GetWindowRect(h, &c.rect);
+            if (!isProgman && !c.hasDefView && c.visible && !c.cloaked)
+                c.hasVisibleChild = HasVisibleWallpaperChild(h);
+            reinterpret_cast<std::vector<DesktopHostCandidate>*>(lp)->push_back(c);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&candidates));
+    return SelectDesktopBackdropTarget(candidates, skipWorker);
+}
 
 std::wstring TranscodedWallpaper()
 {
@@ -189,6 +237,7 @@ void DesktopBackdrop::Update(const std::wstring& mode)
     if (mode_ == L"wallpaper" && !wallpaper_)
         StartWallpaper();
     if (mode_ == L"desktop") {
+        CheckCaptureTarget();
         if (session_ && (closed_ || !IsWindow(desktop_))) {
             Log(L"render: the desktop window went away; capturing it again soon");
             StopCapture();
@@ -266,13 +315,34 @@ DesktopBackdrop::Starting::~Starting()
         CloseHandle(wake);
 }
 
+void DesktopBackdrop::CheckCaptureTarget()
+{
+    if (!session_)
+        return;
+    const double now = ClockMs();
+    if (now < targetCheckMs_)
+        return;
+    targetCheckMs_ = now + kTargetCheckMs;
+    const HWND skip = now < failedWorkerUntilMs_ ? failedWorker_ : nullptr;
+    const DesktopBackdropTarget want = ResolveDesktopBackdropTarget(skip);
+    if (!want.hwnd || want.hwnd == desktop_)
+        return;
+    Log(L"render: widgets' backdrop target changed to %s; switching capture", want.isProgman ? L"Progman" : L"WorkerW");
+    StopCapture();
+    retryMs_ = 0;
+}
+
 bool DesktopBackdrop::StartCapture()
 {
     if (!starting_) {
-        auto start = std::make_shared<Starting>(frameEvent_);
-        start->desktop = FindWindowW(L"Progman", nullptr);
-        if (!start->desktop)
+        const double now = ClockMs();
+        const HWND skip = now < failedWorkerUntilMs_ ? failedWorker_ : nullptr;
+        const DesktopBackdropTarget target = ResolveDesktopBackdropTarget(skip);
+        if (!target.hwnd)
             return false;
+        auto start = std::make_shared<Starting>(frameEvent_);
+        start->desktop = target.hwnd;
+        start->isProgman = target.isProgman;
         starting_ = start;
         startingSince_ = ClockMs();
         std::thread([start, device = device_] {
@@ -319,16 +389,29 @@ bool DesktopBackdrop::StartCapture()
     std::lock_guard g(start->lock);
     if (!start->done) {
         if (ClockMs() - startingSince_ > 5000) {
+            const double now = ClockMs();
             start->abandoned = true;
             starting_.reset();
-            Log(L"render: the desktop window's capture did not start in 5 s; widgets use the wallpaper");
-            retryMs_ = ClockMs() + 300000.0; // not every few seconds: it may never start on this system
+            if (!start->isProgman) {
+                failedWorker_ = start->desktop;
+                failedWorkerUntilMs_ = now + kFailedWorkerBackoffMs;
+                Log(L"render: live-wallpaper WorkerW capture did not start in 5 s; falling back to Progman");
+            } else {
+                Log(L"render: the desktop window's capture did not start in 5 s; widgets use the wallpaper");
+                retryMs_ = now + 300000.0; // not every few seconds: it may never start on this system
+            }
         }
         return false;
     }
     starting_.reset();
     if (!start->ok) {
-        Log(L"render: the desktop window cannot be captured (0x%08X); widgets use the wallpaper", static_cast<unsigned>(start->error));
+        if (!start->isProgman) {
+            failedWorker_ = start->desktop;
+            failedWorkerUntilMs_ = ClockMs() + kFailedWorkerBackoffMs;
+            Log(L"render: live-wallpaper WorkerW cannot be captured (0x%08X); falling back to Progman", static_cast<unsigned>(start->error));
+        } else {
+            Log(L"render: the desktop window cannot be captured (0x%08X); widgets use the wallpaper", static_cast<unsigned>(start->error));
+        }
         return false;
     }
     desktop_ = start->desktop;
@@ -337,12 +420,13 @@ bool DesktopBackdrop::StartCapture()
     session_ = std::move(start->session);
     size_ = start->size;
     closed_ = false;
+    targetCheckMs_ = ClockMs() + kTargetCheckMs;
     HANDLE ev = frameEvent_;
     closedRevoker_ = item_.Closed(winrt::auto_revoke, [this, ev](auto&&, auto&&) {
         closed_ = true;
         SetEvent(ev);
     });
-    Log(L"render: widgets' backdrop: the desktop window, %dx%d", size_.Width, size_.Height);
+    Log(L"render: widgets' backdrop: %s, %dx%d", start->isProgman ? L"Progman" : L"WorkerW", size_.Width, size_.Height);
     return true;
 }
 
@@ -360,6 +444,7 @@ void DesktopBackdrop::StopCapture()
         starting_->item = nullptr;
     }
     starting_.reset();
+    desktop_ = nullptr;
     closedRevoker_.revoke();
     if (session_)
         session_.Close();
