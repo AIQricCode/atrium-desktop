@@ -44,6 +44,7 @@ public:
     struct RenderResult {
         StepResult status = StepResult::Ok;
         bool moving = false;
+        bool gpuSubmitted = false;
     };
 
     using CreateRendererFn = std::function<std::unique_ptr<GlassRenderer>(const Gpu& gpu, HWND hwnd, int width, int height, bool desktop)>;
@@ -56,7 +57,8 @@ public:
     ~PanelGlassHost() = default;
 
     bool HasScreenPanelOnCaptureMonitor(const std::vector<GlassPanel>& panels) const;
-    void KeepFrame(ID3D11Texture2D* frame, bool hasScreenPanel);
+    bool HasAnyVisibleScreenPanel(const std::vector<GlassPanel>& panels) const;
+    bool KeepFrame(ID3D11Texture2D* frame, bool hasScreenPanel);
     ID3D11Texture2D* BackupFrame() const { return lastFrame_.get(); }
     void ReleaseBackupFrame() { lastFrame_ = nullptr; }
     unsigned TakeBackupCopyCount();
@@ -103,16 +105,17 @@ private:
         std::unique_ptr<BackdropSource> source;
         winrt::com_ptr<ID3D11Texture2D> texture;
         RECT bounds{};
+        RECT copyBounds{};
         bool fresh = false;
     };
 
     StepResult SyncPanelCaptures(const std::vector<GlassPanel>& panels, bool barKeepsOwnWindowsOut);
-    StepResult AcquirePanelCaptures();
+    StepResult AcquirePanelCaptures(const std::vector<GlassPanel>& panels);
     void FlushIdleBursts(double now);
     StepResult RenderSinglePanel(const GlassPanel& p, const Settings& settings, RECT monitorRect, float barScale, ID3D11Texture2D* source, uint64_t tick,
-                                 double now, bool& moving);
+                                 double now, bool& moving, bool& gpuSubmitted);
     void UpdatePanelBackdrop(PanelState& ps, const GlassPanel& p, ID3D11Texture2D* source, RECT monitorRect, double now, bool moved, bool changed,
-                             bool& newDesktop);
+                             bool& newDesktop, bool& gpuSubmitted);
     void UpdatePanelInk(PanelState& ps, HWND hwnd, const Settings& settings, float panelScale, int w, int h, double now, bool& changed, bool& under);
     void RecordPanelPresent(PanelState& ps, const GlassPanel& p, int w, int h, double now, double t0, double created, double t1, bool moved, bool newDesktop,
                             bool under, bool same);

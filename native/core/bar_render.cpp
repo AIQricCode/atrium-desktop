@@ -31,6 +31,7 @@ struct RenderMinuteStats {
     unsigned skipped = 0;
     unsigned glassDraws = 0;
     unsigned snapCopies = 0;
+    unsigned flushes = 0;
     std::vector<double> workMs;
     std::vector<double> presentMs;
     std::vector<double> panelsMs;
@@ -116,10 +117,11 @@ void LogRenderMinuteStats(RenderMinuteStats& stats, unsigned keepFrameCopies)
     PROCESS_MEMORY_COUNTERS_EX mem{sizeof(mem)};
     GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&mem), sizeof(mem));
     Log(L"render: last minute %u frames, %u presents, %u echoes skipped; work p50 %.2f ms, p95 %.2f ms, max %.2f ms; "
-        L"presenting p95 %.2f ms; popups and widgets p95 %.2f ms, max %.2f ms; private %zu MB; glass %u, snap %u, keepFrame %u",
+        L"presenting p95 %.2f ms; popups and widgets p95 %.2f ms, max %.2f ms; private %zu MB; glass %u, snap %u, keepFrame %u, flushes %u",
         stats.frames, stats.presents, stats.skipped, w50, w95, stats.workMs.empty() ? 0.0 : stats.workMs.back(), p95, pan95,
-        stats.panelsMs.empty() ? 0.0 : stats.panelsMs.back(), size_t(mem.PrivateUsage >> 20), stats.glassDraws, stats.snapCopies, keepFrameCopies);
-    stats.frames = stats.presents = stats.skipped = stats.glassDraws = stats.snapCopies = 0;
+        stats.panelsMs.empty() ? 0.0 : stats.panelsMs.back(), size_t(mem.PrivateUsage >> 20), stats.glassDraws, stats.snapCopies, keepFrameCopies,
+        stats.flushes);
+    stats.frames = stats.presents = stats.skipped = stats.glassDraws = stats.snapCopies = stats.flushes = 0;
     stats.workMs.clear();
     stats.presentMs.clear();
     stats.panelsMs.clear();
@@ -320,8 +322,7 @@ struct BarRender {
         hidden.copy_from(frame);
         if (freeze) // the popups show in screenshots: they must not sample themselves
             FreezeBackdrop(gpu, frozen, hidden);
-        else
-            panelHost.KeepFrame(frame, panelHost.HasScreenPanelOnCaptureMonitor(snap.panels));
+        const bool copiedBackup = !freeze && panelHost.KeepFrame(frame, panelHost.HasScreenPanelOnCaptureMonitor(snap.panels));
         const double p0 = ElapsedMs(t0);
         const PanelGlassHost::RenderResult pr =
             panelHost.Render(snap.panels, snap.settings, snap.monitor, snap.scale, hidden.get(), tick, capture.KeepsOwnWindowsOut());
@@ -330,10 +331,12 @@ struct BarRender {
             stats.panelsMs.push_back(ElapsedMs(t0) - p0);
         hidden = nullptr;
         // Submit the copies from the duplicated frame before handing it back.
-        if (needScreen) {
+        if (frame != nullptr || copiedBackup || pr.gpuSubmitted) {
             gpu.context->Flush();
-            capture.Release();
+            ++stats.flushes;
         }
+        if (needScreen)
+            capture.Release();
         if (pr.status != PanelGlassHost::StepResult::Ok) {
             stop = ToSessionEnd(pr.status);
             return false;
@@ -457,9 +460,9 @@ struct BarRender {
         const bool owed = barOwed || owedBody || owedMusic || panelHost.InkDue() || panelHost.AnyOwed();
         const bool paced = animating || panelsMoving || owed;
         const bool readback = renderer.ReadbackPending() || panelHost.AnyReadbackPending();
-        const bool pollCapture = capture.RequiresPolling() || panelHost.AnyCaptureRequiresPolling();
-        if (WaitNextRenderTick(paced, readback, paused, pollCapture, snap.settings.showClock, snap.settings.showClockSeconds, pendingSnap, handles, tick) ==
-            WAIT_OBJECT_0) {
+        const bool pollCapture = (!paused && capture.RequiresPolling()) || panelHost.AnyCaptureRequiresPolling();
+        if (WaitNextRenderTick(paced, readback, anyScreenPaused, pollCapture, snap.settings.showClock, snap.settings.showClockSeconds, pendingSnap, handles,
+                               tick) == WAIT_OBJECT_0) {
             stop = Bar::SessionEnd::Exit;
             return false;
         }
@@ -472,23 +475,25 @@ struct BarRender {
             stop = Bar::SessionEnd::Switch; // selected display or its capture source changed
             return false;
         }
-        const bool needScreen = snap.visible || std::ranges::any_of(snap.panels, [](const GlassPanel& p) { return p.visible && !p.desktop; });
-        if (paused != !needScreen) {
-            paused = !needScreen;
+        const bool needPrimaryScreen = snap.visible || panelHost.HasScreenPanelOnCaptureMonitor(snap.panels);
+        const bool needAnyScreen = needPrimaryScreen || panelHost.HasAnyVisibleScreenPanel(snap.panels);
+        anyScreenPaused = !needAnyScreen;
+        if (paused != !needPrimaryScreen) {
+            paused = !needPrimaryScreen;
             capture.SetPaused(paused);
             missedFrame |= paused;
             if (paused && !capture.KeepsOwnWindowsOut())
                 panelHost.ReleaseBackupFrame();
         }
-        ID3D11Texture2D* frame = needScreen ? capture.Acquire() : nullptr;
+        ID3D11Texture2D* frame = needPrimaryScreen ? capture.Acquire() : nullptr;
         if (capture.Lost()) {
             stop = Bar::SessionEnd::Retry; // a new source (display mode change, secure desktop)
             return false;
         }
-        if (ProbeCaptureRecovery(gpu, needScreen, capture.KeepsOwnWindowsOut(), GetTickCount64(), stop))
+        if (ProbeCaptureRecovery(gpu, needPrimaryScreen, capture.KeepsOwnWindowsOut(), GetTickCount64(), stop))
             return false;
         if (!snap.visible)
-            return RenderHiddenSessionStep(gpu, renderer, capture, panelHost, frame, needScreen, t0, stop);
+            return RenderHiddenSessionStep(gpu, renderer, capture, panelHost, frame, needPrimaryScreen, t0, stop);
         renderer.Resize(snap.window.right - snap.window.left, snap.window.bottom - snap.window.top);
         winrt::com_ptr<ID3D11Texture2D> source = AcquireBarBackdrop(gpu, renderer, capture, panelHost, frame);
         const bool hadBackdrop = source != nullptr;
@@ -498,8 +503,7 @@ struct BarRender {
             backdropAt = snap.window;
             missedFrame = false;
         }
-        if (!freeze)
-            panelHost.KeepFrame(frame, panelHost.HasScreenPanelOnCaptureMonitor(snap.panels));
+        const bool copiedBackup = !freeze && panelHost.KeepFrame(frame, panelHost.HasScreenPanelOnCaptureMonitor(snap.panels));
         const double p0 = ElapsedMs(t0);
         const PanelGlassHost::RenderResult pr =
             panelHost.Render(snap.panels, snap.settings, snap.monitor, snap.scale, source.get(), tick, capture.KeepsOwnWindowsOut());
@@ -507,8 +511,12 @@ struct BarRender {
         if (!snap.panels.empty())
             stats.panelsMs.push_back(ElapsedMs(t0) - p0);
         source = nullptr;
-        gpu.context->Flush(); // the panels' copies and comparisons start now, in one submission
-        capture.Release();    // after the Flush (see above)
+        if (frame != nullptr || hadBackdrop || copiedBackup || pr.gpuSubmitted) {
+            gpu.context->Flush(); // the panels' copies and comparisons start now, in one submission
+            ++stats.flushes;
+        }
+        if (needPrimaryScreen)
+            capture.Release(); // after the Flush (see above)
         if (pr.status != PanelGlassHost::StepResult::Ok) {
             if (pr.status == PanelGlassHost::StepResult::Retry)
                 Log(L"render: device lost (popup glass)");
@@ -572,7 +580,7 @@ struct BarRender {
     const double sessionStartMs = ClockMs();
     RECT backdropAt{};
     bool missedFrame = false;
-    bool panelsMoving = false, barOwed = false, paused = false;
+    bool panelsMoving = false, barOwed = false, paused = false, anyScreenPaused = false;
     bool wasGlass = false, wasBody = false, wasMusic = false;
     bool owedBody = false, owedMusic = false, pendingBackdropDirty = false;
     uint64_t tick = 1; // compositor frames (every wake-up when not paced by the clock)

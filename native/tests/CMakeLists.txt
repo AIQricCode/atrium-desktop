@@ -195,3 +195,7 @@ add_test(NAME icon_cache COMMAND icon_cache_tests)
 add_executable(search_query_tests search_query_tests.cpp)
 target_link_libraries(search_query_tests PRIVATE atrium_core_lib)
 add_test(NAME search_query COMMAND search_query_tests)
+
+add_executable(panel_capture_crop_tests panel_capture_crop.cpp)
+target_link_libraries(panel_capture_crop_tests PRIVATE atrium_core_lib)
+add_test(NAME panel_capture_crop COMMAND panel_capture_crop_tests)
