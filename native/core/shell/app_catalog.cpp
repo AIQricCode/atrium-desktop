@@ -331,29 +331,30 @@ std::vector<CatalogFolder> AppCatalog::StartFolders() const
 void AppCatalog::PrefetchStartIcons(int px)
 {
     std::lock_guard g(mutex_);
-    prefetchPx_ = std::clamp(px, 8, 512);
+    cache_.prefetchPx = std::clamp(px, 8, 512);
     QueuePrefetch();
 }
 
 void AppCatalog::SetStartIds(std::vector<std::wstring> ids)
 {
     std::lock_guard g(mutex_);
-    startIds_ = std::set<std::wstring>(ids.begin(), ids.end());
+    cache_.startIds = std::set<std::wstring>(ids.begin(), ids.end());
     QueuePrefetch();
 }
 
 void AppCatalog::QueuePrefetch()
 {
-    if (prefetchPx_ <= 0)
+    if (cache_.prefetchPx <= 0)
         return;
+    const ULONGLONG now = GetTickCount64();
     auto queue = [&](const std::wstring& id) {
-        auto key = std::make_pair(id, prefetchPx_);
-        if (!icons_.contains(key))
-            QueueIcon(key, true);
+        IconKey key{id, cache_.prefetchPx};
+        if (!cache_.icons.contains(key))
+            cache_.QueueIcon(key, IconJobTier::Prefetch, now);
     };
     for (const CatalogApp& app : startPins_)
         queue(app.id);
-    for (const std::wstring& id : startIds_)
+    for (const std::wstring& id : cache_.startIds)
         queue(id);
     cv_.notify_all();
 }
@@ -362,57 +363,53 @@ IconImage AppCatalog::Icon(const std::wstring& id, int px)
 {
     px = std::clamp(px, 8, 512);
     std::lock_guard g(mutex_);
-    auto key = std::make_pair(id, px);
-    if (auto it = icons_.find(key); it != icons_.end()) {
-        it->second.used = ++iconUse_;
+    IconKey key{id, px};
+    if (auto it = cache_.icons.find(key); it != cache_.icons.end()) {
+        it->second.used = ++cache_.iconUse;
         return it->second.image;
     }
-    if (QueueIcon(key, false))
+    if (cache_.QueueIcon(key, IconJobTier::Visible, GetTickCount64()))
         cv_.notify_one();
     return {};
 }
 
-bool AppCatalog::QueueIcon(const std::pair<std::wstring, int>& key, bool prefetch)
+void AppCatalog::SetAheadIcons(const std::vector<std::wstring>& ids, int px)
 {
-    if (requested_.contains(key))
-        return false;
-    if (auto it = failed_.find(key); it != failed_.end() && (it->second.attempts >= 3 || GetTickCount64() - it->second.time < 2000))
-        return false;
-    requested_.insert(key);
-    if (prefetch)
-        iconJobs_.push_front(key);
-    else
-        iconJobs_.push_back(key);
-    return true;
+    px = std::clamp(px, 8, 512);
+    std::lock_guard g(mutex_);
+    if (cache_.SetAhead(ids, px, GetTickCount64()))
+        cv_.notify_all();
 }
 
 void AppCatalog::PrefetchIcons(const std::vector<std::wstring>& ids, int px)
 {
     px = std::clamp(px, 8, 512);
     std::lock_guard g(mutex_);
-    aheadIcons_.clear();
+    const ULONGLONG now = GetTickCount64();
+    bool queued = false;
     for (const std::wstring& id : ids) {
-        auto key = std::make_pair(id, px);
-        aheadIcons_.insert(key);
-        if (!icons_.contains(key))
-            QueueIcon(key, false); // behind what is on screen, in the list's order
+        IconKey key{id, px};
+        if (!cache_.icons.contains(key))
+            queued |= cache_.QueueIcon(key, IconJobTier::Prefetch, now);
     }
-    cv_.notify_all();
+    if (queued)
+        cv_.notify_all();
 }
 
 bool AppCatalog::IconsReady(const std::vector<std::wstring>& ids, int px)
 {
     px = std::clamp(px, 8, 512);
     std::lock_guard g(mutex_);
+    const ULONGLONG now = GetTickCount64();
     bool ready = true, asked = false;
     for (const std::wstring& id : ids) {
-        auto key = std::make_pair(id, px);
-        if (icons_.contains(key))
+        IconKey key{id, px};
+        if (cache_.icons.contains(key))
             continue;
-        if (auto it = failed_.find(key); it != failed_.end() && !requested_.contains(key) && it->second.attempts >= 1)
+        if (auto it = cache_.failed.find(key); it != cache_.failed.end() && !cache_.IsRequested(key) && it->second.attempts >= 1)
             continue; // no icon to wait for: its quiet square
         ready = false;
-        asked |= QueueIcon(key, false);
+        asked |= cache_.QueueIcon(key, IconJobTier::Visible, now);
     }
     if (asked)
         cv_.notify_all();
@@ -422,41 +419,14 @@ bool AppCatalog::IconsReady(const std::vector<std::wstring>& ids, int px)
 void AppCatalog::SetVisibleIcons(VisibleIconsOwner owner, const std::vector<std::pair<std::wstring, int>>& icons)
 {
     std::lock_guard g(mutex_);
-    auto& slot = visibleIcons_[size_t(owner)];
-    slot.clear();
-    slot.insert(icons.begin(), icons.end());
+    if (!cache_.SetVisible(size_t(owner), icons))
+        return;
     PruneIcons();
 }
 
-void AppCatalog::PruneIcons()
+void AppCatalog::PruneIcons(bool sweepStale)
 {
-    auto protectedIcon = [&](const auto& key) {
-        return visibleIcons_[0].contains(key) || visibleIcons_[1].contains(key) || requested_.contains(key) || aheadIcons_.contains(key) ||
-               (key.second == prefetchPx_ &&
-                (startIds_.contains(key.first) || std::any_of(startPins_.begin(), startPins_.end(), [&](const auto& app) { return app.id == key.first; })));
-    };
-    auto staleIcon = [&](const auto& entry) {
-        return loaded_ && !liveIds_.contains(entry.first.first) && !startIds_.contains(entry.first.first) && !protectedIcon(entry.first);
-    };
-    std::erase_if(icons_, staleIcon);
-    std::erase_if(failed_, staleIcon);
-    size_t bytes = 0;
-    for (const auto& [key, icon] : icons_)
-        bytes += icon.image.bgra.size();
-    while (bytes > 16 * 1024 * 1024 || icons_.size() > 512) {
-        auto victim = icons_.end();
-        for (auto it = icons_.begin(); it != icons_.end(); ++it)
-            if (!protectedIcon(it->first) && (victim == icons_.end() || it->second.used < victim->second.used))
-                victim = it;
-        if (victim == icons_.end())
-            break;
-        bytes -= victim->second.image.bgra.size();
-        icons_.erase(victim);
-    }
-    while (failed_.size() > 512) {
-        auto victim = std::ranges::min_element(failed_, [](const auto& a, const auto& b) { return a.second.time < b.second.time; });
-        failed_.erase(victim);
-    }
+    cache_.Prune(loaded_, sweepStale, [&](const std::wstring& id) { return std::ranges::any_of(startPins_, [&](const auto& app) { return app.id == id; }); });
 }
 
 void AppCatalog::RunRefresh(bool forceLayout)
@@ -476,36 +446,35 @@ void AppCatalog::RunRefresh(bool forceLayout)
         startPins_ = std::move(pins);
         startPinGroups_ = std::move(pinGroups);
         startFolders_ = std::move(folders);
-        liveIds_.clear();
+        cache_.liveIds.clear();
         for (const auto& app : apps_)
-            liveIds_.insert(app.id);
+            cache_.liveIds.insert(app.id);
         for (const auto& app : startPins_)
-            liveIds_.insert(app.id);
+            cache_.liveIds.insert(app.id);
         for (const auto& folder : startFolders_) {
             for (const auto& app : folder.apps)
-                liveIds_.insert(app.id);
+                cache_.liveIds.insert(app.id);
         }
-        liveIds_.insert(startIds_.begin(), startIds_.end());
-        failed_.clear(); // catalogue changes allow another bounded attempt
+        cache_.liveIds.insert(cache_.startIds.begin(), cache_.startIds.end());
+        cache_.failed.clear(); // catalogue changes allow another bounded attempt
         loaded_ = true;
-        PruneIcons();
+        PruneIcons(true);
         QueuePrefetch();
     }
     PostMessageW(notify_, msg_, 0, 0);
 }
 
-void AppCatalog::RunIconJob(const std::pair<std::wstring, int>& job)
+void AppCatalog::RunIconJob(const IconKey& job)
 {
     IconImage img;
     LoadShellImage(ShellTarget(job.first), job.second, img);
     {
         std::lock_guard g(mutex_);
-        requested_.erase(job);
+        cache_.activeJob.reset();
         if (!img.Empty()) {
-            icons_[job] = {std::move(img), ++iconUse_};
-            failed_.erase(job);
+            cache_.InsertIcon(job, std::move(img));
         } else {
-            auto& failure = failed_[job];
+            auto& failure = cache_.failed[job];
             ++failure.attempts;
             failure.time = GetTickCount64();
         }
@@ -520,22 +489,21 @@ void AppCatalog::Worker()
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     for (;;) {
         bool refresh = false, forceLayout = false;
-        std::pair<std::wstring, int> job;
+        IconKey job;
         {
             std::unique_lock g(mutex_);
-            cv_.wait(g, [&] { return stop_ || refresh_ || !iconJobs_.empty(); });
+            cv_.wait(g, [&] { return stop_ || refresh_ || cache_.HasWork(); });
             if (stop_)
                 break;
-            if (!iconJobs_.empty()) {
-                // Icons before a refresh (it takes about a second); newest
-                // requests first: they are what is on screen now.
-                job = iconJobs_.back();
-                iconJobs_.pop_back();
-            } else {
+            if (cache_.PopNextJob(job)) {
+                // Icons before a refresh (it takes about a second).
+            } else if (refresh_) {
                 refresh = true;
                 refresh_ = false;
                 forceLayout = forceLayout_;
                 forceLayout_ = false;
+            } else {
+                continue;
             }
         }
         if (refresh)
@@ -613,22 +581,34 @@ PinnedApp AppCatalog::PinFor(const CatalogApp& app)
     return p;
 }
 
-bool AppCatalog::Matches(const CatalogApp& app, const std::wstring& query)
+AppCatalog::PreparedQuery AppCatalog::PrepareQuery(const std::wstring& query)
 {
+    PreparedQuery out;
     if (query.empty())
+        return out;
+    out.folded = Fold(query);
+    out.asciiAlnum = !out.folded.empty() && std::ranges::all_of(out.folded, [](wchar_t c) { return c < 128 && iswalnum(c); });
+    out.pathMatch = out.folded.size() >= 3;
+    return out;
+}
+
+bool AppCatalog::MatchesPrepared(const CatalogApp& app, const PreparedQuery& query)
+{
+    if (query.folded.empty())
         return true;
-    std::wstring q = Fold(query);
-    if (Fold(app.name).find(q) != std::wstring::npos)
+    if (Fold(app.name).find(query.folded) != std::wstring::npos)
         return true;
     // Localised names hide the English one ("计算器"); the id and the exe
     // usually carry it (Microsoft.WindowsCalculator_..., notepad.exe).
-    if (std::ranges::all_of(q, [](wchar_t c) { return c < 128 && iswalnum(c); }) && NameInitials(app.name).starts_with(q))
+    if (query.asciiAlnum && NameInitials(app.name).starts_with(query.folded))
         return true;
     auto tail = [](const std::wstring& s) {
         size_t p = s.find_last_of(L"\\/");
         return p == std::wstring::npos ? s : s.substr(p + 1);
     };
-    return q.size() >= 3 && (Fold(tail(app.id)).find(q) != std::wstring::npos || Fold(tail(app.target)).find(q) != std::wstring::npos);
+    return query.pathMatch && (Fold(tail(app.id)).find(query.folded) != std::wstring::npos || Fold(tail(app.target)).find(query.folded) != std::wstring::npos);
 }
+
+bool AppCatalog::Matches(const CatalogApp& app, const std::wstring& query) { return MatchesPrepared(app, PrepareQuery(query)); }
 
 } // namespace atrium

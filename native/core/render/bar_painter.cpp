@@ -152,7 +152,7 @@ ID2D1Bitmap1* BarPainter::BitmapFor(ID2D1DeviceContext2* d2d, const SceneItem& i
         const IconImage& img = *item.image;
         D2D1_BITMAP_PROPERTIES1 bp =
             D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-        d2d->CreateBitmap(D2D1::SizeU(UINT32(img.width), UINT32(img.height)), img.bgra.data(), UINT32(img.width * 4), &bp, b.put());
+        d2d->CreateBitmap(D2D1::SizeU(UINT32(img.width), UINT32(img.height)), img.Data(), UINT32(img.width * 4), &bp, b.put());
     }
     return b.get();
 }

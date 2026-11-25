@@ -327,7 +327,11 @@ int Launchpad::HitAt(POINT pt) const
 
 void Launchpad::SetPage(int page)
 {
-    page_ = std::clamp(page, 0, Pages() - 1);
+    const int next = std::clamp(page, 0, Pages() - 1);
+    if (next != page_) {
+        page_ = next;
+        UpdatePageTargets(true);
+    }
     surface_.Invalidate();
 }
 

@@ -55,7 +55,7 @@ std::wstring Clock(int64_t us)
 // (corner_profile.h): each pixel keeps the share of it inside the outline (`radius` a share of the side).
 IconImage RoundCorners(const IconImage& src, float radius)
 {
-    IconImage out = src;
+    std::vector<uint8_t> px = src.Bytes();
     const float w = float(src.width), h = float(src.height);
     const CornerProfile profile = CornerFor(w, h, radius * std::min(w, h));
     for (int y = 0; y < src.height; ++y)
@@ -63,11 +63,11 @@ IconImage RoundCorners(const IconImage& src, float radius)
             const float cover = CornerCoverage(float(x) + 0.5f, float(y) + 0.5f, w, h, profile);
             if (cover >= 1)
                 continue;
-            uint8_t* p = &out.bgra[(size_t(y) * size_t(src.width) + size_t(x)) * 4];
+            uint8_t* p = &px[(size_t(y) * size_t(src.width) + size_t(x)) * 4];
             for (int c = 0; c < 4; ++c)
                 p[c] = uint8_t(std::lround(float(p[c]) * cover));
         }
-    return out;
+    return IconImage::FromBgra(src.width, src.height, std::move(px));
 }
 
 // The picture's colour: its pixels weighted by how vivid they are, then lifted to read on glass.
@@ -75,11 +75,12 @@ IconImage RoundCorners(const IconImage& src, float radius)
 std::optional<D2D1_COLOR_F> Tint(const IconImage& src)
 {
     double r = 0, g = 0, b = 0, weight = 0;
-    for (size_t i = 0; i + 3 < src.bgra.size(); i += 16) { // every fourth pixel is plenty
-        const float a = float(src.bgra[i + 3]) / 255.f;
+    const auto& data = src.Bytes();
+    for (size_t i = 0; i + 3 < data.size(); i += 16) { // every fourth pixel is plenty
+        const float a = float(data[i + 3]) / 255.f;
         if (a < 0.5f)
             continue;
-        const float pb = float(src.bgra[i]) / 255.f / a, pg = float(src.bgra[i + 1]) / 255.f / a, pr = float(src.bgra[i + 2]) / 255.f / a;
+        const float pb = float(data[i]) / 255.f / a, pg = float(data[i + 1]) / 255.f / a, pr = float(data[i + 2]) / 255.f / a;
         const float hi = std::max({pr, pg, pb}), lo = std::min({pr, pg, pb});
         const float vivid = (hi - lo) * hi; // saturated and bright counts most
         r += pr * vivid;
@@ -87,7 +88,7 @@ std::optional<D2D1_COLOR_F> Tint(const IconImage& src)
         b += pb * vivid;
         weight += vivid;
     }
-    if (weight < 1e-3 * (double(src.bgra.size()) / 16 + 1))
+    if (weight < 1e-3 * (double(data.size()) / 16 + 1))
         return std::nullopt;
     const float k = float(weight), top = float(std::max({r, g, b}) / weight);
     const float lift = 0.95f / std::max(top, 0.05f);
@@ -218,7 +219,7 @@ void NowPlayingCard::TakeArtwork()
     artVersion_ = media_.artworkVersion;
     surface_.ForgetImage(L"np|art");
     const IconImage* art = media_.artwork.get();
-    if (!art || art->Empty() || art->bgra.size() < size_t(art->width) * size_t(art->height) * 4) {
+    if (!art || art->Empty() || art->ByteSize() < size_t(art->width) * size_t(art->height) * 4) {
         art_ = IconImage{};
         tint_.reset();
         return;

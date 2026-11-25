@@ -99,14 +99,12 @@ bool DecodePng(const std::vector<BYTE>& bytes, IconImage& out)
     conv->GetSize(&w, &h);
     if (!w || !h || w > 512 || h > 512)
         return false;
-    out.width = int(w);
-    out.height = int(h);
-    out.bgra.resize(size_t(w) * h * 4);
-    if (FAILED(conv->CopyPixels(nullptr, w * 4, UINT(out.bgra.size()), out.bgra.data())))
+    std::vector<uint8_t> px(size_t(w) * h * 4);
+    if (FAILED(conv->CopyPixels(nullptr, w * 4, UINT(px.size()), px.data())))
         return false;
-    for (size_t i = 3; i < out.bgra.size(); i += 4)
-        if (out.bgra[i])
-            return true;
+    for (size_t i = 3; i < px.size(); i += 4)
+        if (px[i])
+            return (out = IconImage::FromBgra(int(w), int(h), std::move(px))), true;
     return false;
 }
 
@@ -118,20 +116,21 @@ bool DecodePng(const std::vector<BYTE>& bytes, IconImage& out)
 int GlyphTone(const IconImage& img)
 {
     size_t opaque = 0, light = 0, dark = 0;
-    for (size_t i = 0; i + 3 < img.bgra.size(); i += 4) {
-        const int a = img.bgra[i + 3];
+    const auto& data = img.Bytes();
+    for (size_t i = 0; i + 3 < data.size(); i += 4) {
+        const int a = data[i + 3];
         if (a < 64)
             continue;
         ++opaque;
         // Premultiplied: the colour itself is the value over alpha.
-        const int b = img.bgra[i] * 255 / a, g = img.bgra[i + 1] * 255 / a, r = img.bgra[i + 2] * 255 / a;
+        const int b = data[i] * 255 / a, g = data[i + 1] * 255 / a, r = data[i + 2] * 255 / a;
         const int chroma = std::max({r, g, b}) - std::min({r, g, b}), lum = (54 * r + 183 * g + 19 * b) >> 8;
         if (chroma < 40 && lum > 200)
             ++light;
         else if (chroma < 40 && lum < 60)
             ++dark;
     }
-    if (opaque < 8 || opaque * 4 > img.bgra.size() / 4 * 3)
+    if (opaque < 8 || opaque * 4 > data.size() / 4 * 3)
         return 0;
     return light * 10 >= opaque * 6 ? 1 : dark * 10 >= opaque * 6 ? -1 : 0;
 }
@@ -141,23 +140,23 @@ int GlyphTone(const IconImage& img)
 // for a black one. Alpha and coloured pixels stay.
 IconImage InkedGlyph(const IconImage& img, int tone)
 {
-    IconImage out = img;
+    std::vector<uint8_t> px = img.Bytes();
     const int ink[3] = {tone > 0 ? 0x17 : 255, tone > 0 ? 0x13 : 255, tone > 0 ? 0x11 : 255}; // b, g, r
     const int strength = tone > 0 ? 235 : 245;
-    for (size_t i = 0; i + 3 < out.bgra.size(); i += 4) {
-        const int a = out.bgra[i + 3];
+    for (size_t i = 0; i + 3 < px.size(); i += 4) {
+        const int a = px[i + 3];
         if (!a)
             continue;
-        const int b = out.bgra[i] * 255 / a, g = out.bgra[i + 1] * 255 / a, r = out.bgra[i + 2] * 255 / a;
+        const int b = px[i] * 255 / a, g = px[i + 1] * 255 / a, r = px[i + 2] * 255 / a;
         const int chroma = std::max({r, g, b}) - std::min({r, g, b}), lum = (54 * r + 183 * g + 19 * b) >> 8;
         if (chroma >= 48 || (tone > 0 ? lum < 128 : lum >= 128))
             continue;
         const int na = a * strength / 255;
         for (int k = 0; k < 3; ++k)
-            out.bgra[i + size_t(k)] = uint8_t(ink[k] * na / 255);
-        out.bgra[i + 3] = uint8_t(na);
+            px[i + size_t(k)] = uint8_t(ink[k] * na / 255);
+        px[i + 3] = uint8_t(na);
     }
-    return out;
+    return IconImage::FromBgra(img.width, img.height, std::move(px));
 }
 
 // Windows' record of the icons that have been in the tray.

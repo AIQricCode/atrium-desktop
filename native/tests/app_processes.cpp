@@ -189,21 +189,19 @@ void CheckTermination(const fs::path& self)
 
 IconImage MakeBadge(int size, uint8_t r, uint8_t g, uint8_t b, bool splitPattern = false)
 {
-    IconImage img;
-    img.width = img.height = size;
-    img.bgra.assign(static_cast<size_t>(size) * static_cast<size_t>(size) * 4, 0);
+    std::vector<uint8_t> px(static_cast<size_t>(size) * static_cast<size_t>(size) * 4, 0);
     const int pad = size / 8;
     for (int y = pad; y < size - pad; ++y) {
         for (int x = pad; x < size - pad; ++x) {
             const size_t off = (static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)) * 4;
             const bool rightHalf = splitPattern && x >= size / 2;
-            img.bgra[off + 0] = rightHalf ? r : b;
-            img.bgra[off + 1] = g;
-            img.bgra[off + 2] = rightHalf ? b : r;
-            img.bgra[off + 3] = 255;
+            px[off + 0] = rightHalf ? r : b;
+            px[off + 1] = g;
+            px[off + 2] = rightHalf ? b : r;
+            px[off + 3] = 255;
         }
     }
-    return img;
+    return IconImage::FromBgra(size, size, std::move(px));
 }
 
 void CheckTaskRules()

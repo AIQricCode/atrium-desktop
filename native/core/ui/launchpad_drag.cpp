@@ -99,6 +99,7 @@ void Launchpad::DropLifted()
         stale_ = false;
         Refresh();
     } else {
+        UpdatePageTargets(true);
         surface_.Invalidate();
     }
 }

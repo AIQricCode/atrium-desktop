@@ -197,13 +197,10 @@ bool DecodeWicSquare(IWICImagingFactory* wic, std::vector<uint8_t>& bytes, IconI
     UINT w = 0, h = 0;
     if (FAILED(converter->GetSize(&w, &h)) || w == 0 || h == 0 || w > 8192 || h > 8192)
         return false;
-    IconImage raw;
-    raw.width = static_cast<int>(w);
-    raw.height = static_cast<int>(h);
-    raw.bgra.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
-    if (FAILED(converter->CopyPixels(nullptr, w * 4, static_cast<UINT>(raw.bgra.size()), raw.bgra.data())))
+    std::vector<uint8_t> px(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+    if (FAILED(converter->CopyPixels(nullptr, w * 4, static_cast<UINT>(px.size()), px.data())))
         return false;
-    out = CropToSquare(raw, kArtworkSizePx);
+    out = CropToSquare(IconImage::FromBgra(static_cast<int>(w), static_cast<int>(h), std::move(px)), kArtworkSizePx);
     return !out.Empty();
 }
 

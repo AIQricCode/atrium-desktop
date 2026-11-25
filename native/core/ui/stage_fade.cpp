@@ -40,7 +40,7 @@ Plane Shrink(const IconImage& image, int w, int pad)
             const int x0 = std::min(image.width - 1, int(float(x) * k)), x1 = std::max(x0 + 1, std::min(image.width, int(float(x + 1) * k)));
             std::array<float, 4> sum{};
             for (int sy = y0; sy < y1; ++sy) {
-                const uint8_t* s = image.bgra.data() + (size_t(sy) * size_t(image.width) + size_t(x0)) * 4;
+                const uint8_t* s = image.Data() + (size_t(sy) * size_t(image.width) + size_t(x0)) * 4;
                 for (int sx = x0; sx < x1; ++sx, s += 4)
                     for (size_t c = 0; c < 4; ++c)
                         sum[c] += float(s[c]);
@@ -126,7 +126,7 @@ IconImage FadeAway(const IconImage& image, float top, float bottom, const StageF
     levels.reserve(kLevels.size());
     for (float l : kLevels)
         levels.push_back(Blurred(base, l * fade.maxBlur / k));
-    IconImage out{base.w, base.h, std::vector<uint8_t>(size_t(base.w) * size_t(base.h) * 4)};
+    std::vector<uint8_t> out(size_t(base.w) * size_t(base.h) * 4);
     for (int y = 0; y < base.h; ++y) {
         const float down = ((float(y - pad) + 0.5f) * k - top) / (bottom - top), v = up ? 1 - down : down;
         const float want = StageFadeBlur(v), o = StageFadeOpacity(v);
@@ -137,11 +137,11 @@ IconImage FadeAway(const IconImage& image, float top, float bottom, const StageF
         const float t = std::clamp((want - kLevels[i]) / (kLevels[i + 1] - kLevels[i]), 0.f, 1.f);
         const float* a = levels[i].Row(y);
         const float* c = levels[i + 1].Row(y);
-        uint8_t* d = out.bgra.data() + size_t(y) * size_t(base.w) * 4;
+        uint8_t* d = out.data() + size_t(y) * size_t(base.w) * 4;
         for (size_t n = 0; n < size_t(base.w) * 4; ++n)
             d[n] = uint8_t(std::clamp(std::lround((a[n] + (c[n] - a[n]) * t) * o), 0L, 255L));
     }
-    return out;
+    return IconImage::FromBgra(base.w, base.h, std::move(out));
 }
 
 } // namespace atrium

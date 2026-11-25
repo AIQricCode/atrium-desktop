@@ -187,3 +187,11 @@ add_test(NAME power_card_hit COMMAND power_card_hit_tests)
 add_executable(widget_refresh_tests widget_refresh.cpp)
 target_link_libraries(widget_refresh_tests PRIVATE atrium_core_lib)
 add_test(NAME widget_refresh COMMAND widget_refresh_tests)
+
+add_executable(icon_cache_tests icon_cache_tests.cpp)
+target_link_libraries(icon_cache_tests PRIVATE atrium_core_lib)
+add_test(NAME icon_cache COMMAND icon_cache_tests)
+
+add_executable(search_query_tests search_query_tests.cpp)
+target_link_libraries(search_query_tests PRIVATE atrium_core_lib)
+add_test(NAME search_query COMMAND search_query_tests)

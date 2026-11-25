@@ -179,12 +179,10 @@ IconImage ReadPhoto(const std::wstring& path, UINT w, UINT h)
         FAILED(scale->Initialize(clip.get(), w, h, WICBitmapInterpolationModeHighQualityCubic)) || FAILED(f->CreateFormatConverter(conv.put())) ||
         FAILED(conv->Initialize(scale.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom)))
         return out;
-    out.bgra.resize(size_t(w) * h * 4);
-    if (FAILED(conv->CopyPixels(nullptr, w * 4, UINT(out.bgra.size()), out.bgra.data())))
+    std::vector<uint8_t> px(size_t(w) * h * 4);
+    if (FAILED(conv->CopyPixels(nullptr, w * 4, UINT(px.size()), px.data())))
         return {};
-    out.width = int(w);
-    out.height = int(h);
-    return out;
+    return IconImage::FromBgra(int(w), int(h), std::move(px));
 }
 
 struct PhotoRead {

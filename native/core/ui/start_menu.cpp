@@ -470,6 +470,7 @@ void StartMenu::Close(bool launched)
     composition_.clear();
     searchFocused_ = false;
     catalog_.SetVisibleIcons(VisibleIconsOwner::Start, {});
+    askedIcons_.clear();
     powerOpen_ = false;
     surface_.Hide();
     lastClosed_ = GetTickCount64();
@@ -664,13 +665,14 @@ void StartMenu::Restage()
 std::vector<StartMenu::Row> StartMenu::Results() const
 {
     std::vector<Row> out;
+    const AppCatalog::PreparedQuery q = AppCatalog::PrepareQuery(query_);
     // Folders first (by name or initials), then the apps.
     for (size_t i = 0; i < tiles_.size(); ++i)
-        if (tiles_[i].folder && AppCatalog::Matches(CatalogApp{tiles_[i].name}, query_))
+        if (tiles_[i].folder && AppCatalog::MatchesPrepared(CatalogApp{tiles_[i].name}, q))
             out.push_back({0, int(i), {}});
     std::vector<CatalogApp> apps;
     for (const CatalogApp& a : apps_)
-        if (!Hidden(a.id) && AppCatalog::Matches(a, query_))
+        if (!Hidden(a.id) && AppCatalog::MatchesPrepared(a, q))
             apps.push_back(a);
     // Names that start with the query first, then the other matches.
     std::ranges::stable_partition(apps, [&](const CatalogApp& a) {
@@ -977,15 +979,12 @@ void StartMenu::Paint(Canvas& c)
     PaintGrip(c, t);
     if (drag_.on)
         PaintDragged(c, t);
-    catalog_.SetVisibleIcons(VisibleIconsOwner::Start, visibleIcons_);
+    if (visibleIcons_ != askedIcons_)
+        askedIcons_ = visibleIcons_, catalog_.SetVisibleIcons(VisibleIconsOwner::Start, visibleIcons_);
     PaintPowerCard(c, t, shapes);
     c.EndGroup();
-    for (ShapeDip& sh : shapes) {
-        sh.rect.left += offX;
-        sh.rect.right += offX;
-        sh.rect.top += offY;
-        sh.rect.bottom += offY;
-    }
+    for (ShapeDip& sh : shapes)
+        sh.rect.left += offX, sh.rect.right += offX, sh.rect.top += offY, sh.rect.bottom += offY;
     surface_.SetShapes(shapes, animating || resizing);
 }
 

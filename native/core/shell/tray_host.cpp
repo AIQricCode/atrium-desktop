@@ -80,7 +80,7 @@ uint64_t HashIconImage(const IconImage& img)
     };
     mix(uint64_t(img.width));
     mix(uint64_t(img.height));
-    for (uint8_t b : img.bgra)
+    for (uint8_t b : img.Bytes())
         mix(b);
     return h;
 }

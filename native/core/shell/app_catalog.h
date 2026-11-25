@@ -6,16 +6,13 @@
 
 #include "icon_image.h"
 #include "pinned_app.h"
+#include "shell/app_icon_cache.h"
 
 #include <windows.h>
 
-#include <array>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
-#include <map>
 #include <mutex>
-#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -69,10 +66,18 @@ public:
     // The apps of the start menu's own arrangement (start.json): read ahead and kept like the pins'.
     void SetStartIds(std::vector<std::wstring> ids);
     void SetVisibleIcons(VisibleIconsOwner owner, const std::vector<std::pair<std::wstring, int>>& icons);
-    // Icons read ahead behind those on screen and kept like the pins' (Launchpad's apps).
+    // Icons read ahead for adjacent pages (`px`) and protected from eviction until the next turn.
+    void SetAheadIcons(const std::vector<std::wstring>& ids, int px);
+    // Background prefetch (Launchpad): queued behind visible and adjacent icons, subject to cache eviction.
     void PrefetchIcons(const std::vector<std::wstring>& ids, int px);
     // Every one of these icons read (or found missing): asks for those not yet asked for.
     bool IconsReady(const std::vector<std::wstring>& ids, int px);
+
+    struct PreparedQuery {
+        std::wstring folded;
+        bool asciiAlnum = false;
+        bool pathMatch = false;
+    };
 
     static bool Launch(const CatalogApp& app);
     // Desktop apps only (a packaged app has no exe to elevate or to show): run elevated (the
@@ -82,6 +87,8 @@ public:
     static PinnedApp PinFor(const CatalogApp& app);
     // Case-insensitive match of `query` against the name (and words in it), or the start of
     // its initials (NameInitials: "wx" finds 微信).
+    static PreparedQuery PrepareQuery(const std::wstring& query);
+    static bool MatchesPrepared(const CatalogApp& app, const PreparedQuery& query);
     static bool Matches(const CatalogApp& app, const std::wstring& query);
     // An app to show among apps (Launchpad): not an uninstaller, nor a shortcut to a document, a web
     // page, a help or a folder, nor one of the shell's own places.
@@ -102,29 +109,13 @@ private:
     FILETIME layoutTime_{};
     bool layoutLoaded_ = false;
     bool loaded_ = false, refresh_ = false, forceLayout_ = false, stop_ = false;
-    int prefetchPx_ = 0;
     void QueuePrefetch(); // under mutex_
-    void PruneIcons(); // under mutex_
-    bool QueueIcon(const std::pair<std::wstring, int>& key, bool prefetch);
+    void PruneIcons(bool sweepStale = false); // under mutex_
     void RefreshStartLayout(bool force); // worker only
     std::vector<CatalogApp> ResolveStartLayoutPins(const std::vector<CatalogApp>& apps, std::vector<CatalogFolder>& pinGroups) const;
     void RunRefresh(bool forceLayout);
-    void RunIconJob(const std::pair<std::wstring, int>& job);
-    std::deque<std::pair<std::wstring, int>> iconJobs_;
-    struct CachedIcon {
-        IconImage image;
-        uint64_t used = 0;
-    };
-    struct FailedIcon {
-        unsigned attempts = 0;
-        ULONGLONG time = 0;
-    };
-    std::map<std::pair<std::wstring, int>, CachedIcon> icons_;
-    std::map<std::pair<std::wstring, int>, FailedIcon> failed_;
-    std::set<std::pair<std::wstring, int>> requested_, aheadIcons_;
-    std::array<std::set<std::pair<std::wstring, int>>, 2> visibleIcons_;
-    std::set<std::wstring> liveIds_, startIds_;
-    uint64_t iconUse_ = 0;
+    void RunIconJob(const IconKey& job);
+    AppIconCache cache_;
     std::thread thread_;
 };
 

@@ -3,6 +3,7 @@
 #include "clock.h"
 #include "localization.h"
 #include "shell/launchpad_order.h"
+#include "ui/launchpad_page_ids.h"
 
 #include <algorithm>
 #include <cmath>
@@ -68,9 +69,11 @@ void Launchpad::Open(RECT work, HWND previous)
     hoverAnim_.clear();
     KillTimer(surface_.Hwnd(), kCloseTimer);
     openedMs_ = lastPaint_ = revealedMs_ = ClockMs();
-    loading_ = !catalog_.IconsReady(Ids(), iconPx_); // every icon at once, after a spinner
+    pageIconIds_ = PageIconIds(page_);
+    loading_ = !pageIconIds_.empty() && !catalog_.IconsReady(pageIconIds_, iconPx_); // current page icons first
     surface_.SetRadius(Radius());
     surface_.Show(rect, true, POINT{cx, cy}, false);
+    UpdatePageTargets(false);
     PublishGlass(openedMs_);
     if (const UINT blink = GetCaretBlinkTime(); blink != INFINITE)
         SetTimer(surface_.Hwnd(), kCaretTimer, std::max(1u, blink), nullptr);
@@ -109,13 +112,24 @@ std::vector<CatalogApp> Launchpad::LaunchableApps() const
     return apps;
 }
 
-std::vector<std::wstring> Launchpad::Ids() const
+std::vector<std::wstring> Launchpad::PageIconIds(int page) const { return ExpandLaunchpadPageIds(Shown(), system_, page, grid_.perPage, kFolderId); }
+
+void Launchpad::UpdatePageTargets(bool prioritize)
 {
-    std::vector<std::wstring> ids;
-    ids.reserve(apps_.size());
-    for (const CatalogApp& app : apps_)
-        ids.push_back(app.id);
-    return ids;
+    pageIconIds_ = PageIconIds(page_);
+    if (!surface_.Visible() || closing_)
+        return;
+    std::vector<std::wstring> adjacent;
+    const int pages = Pages();
+    if (page_ + 1 < pages)
+        adjacent = PageIconIds(page_ + 1);
+    if (page_ > 0) {
+        std::vector<std::wstring> prev = PageIconIds(page_ - 1);
+        adjacent.insert(adjacent.end(), prev.begin(), prev.end());
+    }
+    catalog_.SetAheadIcons(adjacent, iconPx_);
+    if (prioritize && !pageIconIds_.empty())
+        catalog_.IconsReady(pageIconIds_, iconPx_);
 }
 
 int Launchpad::IconPx(RECT work) const { return int(std::lround(grid_.iconDip * PopupScale(work))); }
@@ -124,13 +138,22 @@ void Launchpad::Prewarm(RECT work)
 {
     if (surface_.Visible() || !catalog_.Loaded())
         return;
+    order_ = LoadLaunchpadOrder();
     apps_ = LaunchableApps();
+    Split();
     Size(work);
     const int px = IconPx(work);
-    if (prewarmed_ == std::make_pair(px, apps_.size()))
+    std::vector<std::wstring> page0 = ExpandLaunchpadPageIds(tiles_, system_, 0, grid_.perPage, kFolderId);
+    std::vector<std::wstring> page1 =
+        PageCount(tiles_.size(), grid_.perPage) > 1 ? ExpandLaunchpadPageIds(tiles_, system_, 1, grid_.perPage, kFolderId) : std::vector<std::wstring>{};
+    std::vector<std::wstring> keyIds = page0;
+    keyIds.insert(keyIds.end(), page1.begin(), page1.end());
+    if (prewarmed_ == std::make_pair(px, keyIds))
         return;
-    prewarmed_ = {px, apps_.size()};
-    catalog_.PrefetchIcons(Ids(), px);
+    prewarmed_ = {px, std::move(keyIds)};
+    catalog_.SetAheadIcons(page0, px);
+    if (!page1.empty())
+        catalog_.PrefetchIcons(page1, px);
 }
 
 void Launchpad::Close(bool launched)
@@ -184,6 +207,7 @@ void Launchpad::Refresh()
         if (!query_.empty())
             Filter();
         page_ = std::min(page_, Pages() - 1);
+        UpdatePageTargets(true);
     }
     surface_.Invalidate();
 }
@@ -191,12 +215,14 @@ void Launchpad::Refresh()
 void Launchpad::Filter()
 {
     shown_.clear();
+    const AppCatalog::PreparedQuery q = AppCatalog::PrepareQuery(query_);
     for (const auto& app : apps_)
-        if (AppCatalog::Matches(app, query_))
+        if (AppCatalog::MatchesPrepared(app, q))
             shown_.push_back(app);
     page_ = 0;
     pageShown_ = pageSpeed_ = 0;
     sel_ = query_.empty() || shown_.empty() ? -1 : 0; // Enter opens the best match
+    UpdatePageTargets(true);
 }
 
 // Windows' own apps go into one folder at the end, except its Settings, which people do open.
@@ -230,6 +256,7 @@ void Launchpad::ShowFolder(bool open)
     }
     pageShown_ = float(page_);
     pageSpeed_ = 0;
+    UpdatePageTargets(true);
     surface_.Invalidate();
 }
 
@@ -301,7 +328,7 @@ void Launchpad::Paint(Canvas& c)
     if (tint_)
         c.Fill(all, Radius(), D2D1::ColorF(0, 0, 0, kVeil * a));
     if (loading_ && !closing_) {
-        if (catalog_.IconsReady(Ids(), iconPx_) || c.now - openedMs_ > kLoadWaitMs) {
+        if (pageIconIds_.empty() || catalog_.IconsReady(pageIconIds_, iconPx_) || c.now - openedMs_ > kLoadWaitMs) {
             loading_ = false;
             revealedMs_ = c.now;
         }

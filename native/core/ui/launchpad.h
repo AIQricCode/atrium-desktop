@@ -66,7 +66,8 @@ private:
     void PaintFolder(Canvas& c, const Theme& t, D2D1_RECT_F r);                       // the system folder: its first nine apps
     void Split();                                                                      // tiles_ and system_ from apps_
     void ShowFolder(bool open);
-    std::vector<std::wstring> Ids() const; // apps_' ids
+    std::vector<std::wstring> PageIconIds(int page) const;
+    void UpdatePageTargets(bool prioritize);
     int IconPx(RECT work) const;
     void PublishGlass(double now);
     float Hover(Canvas& c, int id, bool on);
@@ -145,7 +146,8 @@ private:
     double openedMs_ = 0, closedMs_ = 0, lastPaint_ = 0;
     bool closing_ = false, launched_ = false;
     ULONGLONG lastClosed_ = 0;
-    std::pair<int, size_t> prewarmed_; // icon px and the apps' count last read ahead
+    std::pair<int, std::vector<std::wstring>> prewarmed_; // icon px and page ids last read ahead
+    std::vector<std::wstring> pageIconIds_;
     std::vector<Hit> hits_;
     std::vector<std::pair<std::wstring, int>> visibleIcons_, askedIcons_;
     std::map<int, motion::Follow> hoverAnim_;

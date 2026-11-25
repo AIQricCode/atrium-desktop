@@ -338,7 +338,7 @@ ID2D1Bitmap* Canvas::Bitmap(const std::wstring& key, const IconImage& image)
         if (image.Empty())
             return nullptr;
         D2D1_BITMAP_PROPERTIES bp = D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-        if (FAILED(d2d_->CreateBitmap(D2D1::SizeU(UINT32(image.width), UINT32(image.height)), image.bgra.data(), UINT32(image.width * 4), &bp, b.put())))
+        if (FAILED(d2d_->CreateBitmap(D2D1::SizeU(UINT32(image.width), UINT32(image.height)), image.Data(), UINT32(image.width * 4), &bp, b.put())))
             return nullptr;
     }
     return b.get();

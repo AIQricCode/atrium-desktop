@@ -74,7 +74,7 @@ void CheckFade()
     Require(f.width == 40 && f.margin > f.maxBlur && f.maxBlur > 0, "a small picture kept at its size, room for the blur");
     const IconImage down = FadeAway(white, 0, 40, f, false), up = FadeAway(white, 0, 40, f, true);
     const int pad = (down.width - 40) / 2;
-    auto alpha = [&](const IconImage& i, int y) { return i.bgra[(size_t(y + pad) * size_t(i.width) + size_t(i.width / 2)) * 4 + 3]; };
+    auto alpha = [&](const IconImage& i, int y) { return i.Data()[(size_t(y + pad) * size_t(i.width) + size_t(i.width / 2)) * 4 + 3]; };
     Require(down.width == 40 + 2 * pad && down.height == down.width, "the margin around");
     Require(alpha(down, 2) > 245 && alpha(down, 39) < 10 && alpha(down, 20) > alpha(down, 32), "away down: whole at the top, gone at the bottom");
     Require(alpha(up, 37) > 245 && alpha(up, 0) < 10, "away up: the other way");

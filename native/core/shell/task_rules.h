@@ -169,7 +169,7 @@ inline bool IsTaskbarWindowCandidate(LONG_PTR style, LONG_PTR exStyle, bool hasO
 
 inline bool IsValidIconImage(const IconImage& img)
 {
-    return img.width > 0 && img.height > 0 && img.bgra.size() >= static_cast<size_t>(img.width) * static_cast<size_t>(img.height) * 4;
+    return img.width > 0 && img.height > 0 && img.ByteSize() >= static_cast<size_t>(img.width) * static_cast<size_t>(img.height) * 4;
 }
 
 inline std::array<double, 4> SampleIconCell(const IconImage& img, int gx, int gy, int grid)
@@ -178,6 +178,7 @@ inline std::array<double, 4> SampleIconCell(const IconImage& img, int gx, int gy
     const int x1 = std::min(img.width, std::max(x0 + 1, static_cast<int>((static_cast<int64_t>(gx + 1) * img.width) / grid)));
     const int y0 = static_cast<int>((static_cast<int64_t>(gy) * img.height) / grid);
     const int y1 = std::min(img.height, std::max(y0 + 1, static_cast<int>((static_cast<int64_t>(gy + 1) * img.height) / grid)));
+    const uint8_t* data = img.Data();
     std::array<double, 4> sum{};
     int count = 0;
     for (int y = y0; y < y1; ++y) {
@@ -185,7 +186,7 @@ inline std::array<double, 4> SampleIconCell(const IconImage& img, int gx, int gy
         for (int x = x0; x < x1; ++x) {
             const size_t off = (row + static_cast<size_t>(x)) * 4;
             for (size_t c = 0; c < 4; ++c)
-                sum[c] += static_cast<double>(img.bgra[off + c]);
+                sum[c] += static_cast<double>(data[off + c]);
             ++count;
         }
     }

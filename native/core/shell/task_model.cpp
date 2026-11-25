@@ -1033,7 +1033,7 @@ struct TaskModel::Impl {
         std::erase_if(icons, [&](const auto& entry) { return !entry.second.loading && !liveIconKeys.contains(entry.first.key); });
         size_t bytes = 0;
         for (const auto& [key, entry] : icons)
-            bytes += entry.image.bgra.size();
+            bytes += entry.image.ByteSize();
         while (bytes > 16 * 1024 * 1024 || icons.size() > 512) {
             auto victim = icons.end();
             for (auto it = icons.begin(); it != icons.end(); ++it) {
@@ -1045,7 +1045,7 @@ struct TaskModel::Impl {
             }
             if (victim == icons.end())
                 break; // protected live working set only
-            bytes -= victim->second.image.bgra.size();
+            bytes -= victim->second.image.ByteSize();
             icons.erase(victim);
         }
     }
@@ -1192,7 +1192,7 @@ struct TaskModel::Impl {
                 return;
             e.loading = false;
             if (ok) {
-                changed = !e.have || e.image.bgra != img.bgra;
+                changed = !e.have || (e.image.pixels != img.pixels && e.image.Bytes() != img.Bytes());
                 e.image = std::move(img);
                 e.have = true;
             } else {

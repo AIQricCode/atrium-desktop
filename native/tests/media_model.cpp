@@ -249,13 +249,14 @@ void CheckSparseGsmtcTimeline()
 void CheckCropToSquare()
 {
     for (const auto& [w, h] : {std::pair{8, 8}, std::pair{16, 8}, std::pair{8, 16}}) {
-        IconImage img{w, h, std::vector<uint8_t>(size_t(w) * size_t(h) * 4, 255)};
+        std::vector<uint8_t> px(size_t(w) * size_t(h) * 4, 255);
         const int side = std::min(w, h), x0 = (w - side) / 2, y0 = (h - side) / 2;
         for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x)
-                img.bgra[(size_t(y) * size_t(w) + size_t(x)) * 4 + 2] = (x >= x0 && x < x0 + side && y >= y0 && y < y0 + side) ? 220 : 10;
+                px[(size_t(y) * size_t(w) + size_t(x)) * 4 + 2] = (x >= x0 && x < x0 + side && y >= y0 && y < y0 + side) ? 220 : 10;
+        const IconImage img = IconImage::FromBgra(w, h, std::move(px));
         const IconImage out = CropToSquare(img, 4);
-        Require(out.width == 4 && out.height == 4 && out.bgra[2] == 220 && out.bgra[3] == 255, "CropToSquare crops centred square");
+        Require(out.width == 4 && out.height == 4 && out.Data()[2] == 220 && out.Data()[3] == 255, "CropToSquare crops centred square");
     }
 }
 

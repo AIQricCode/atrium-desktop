@@ -270,7 +270,7 @@ private:
     } pendingSync_;
     std::vector<Tile> tiles_;
     std::vector<Row> results_, list_;
-    std::vector<std::pair<std::wstring, int>> visibleIcons_;
+    std::vector<std::pair<std::wstring, int>> visibleIcons_, askedIcons_;
     std::wstring query_;
     std::wstring composition_;
     bool searchFocused_ = false;

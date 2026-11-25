@@ -78,24 +78,22 @@ bool Blank(const uint8_t* src, int w, int h, int stride)
 IconImage SoftShadow(int w, int h)
 {
     const int pad = kShadowPad / 2, sw = std::max(1, w / 2), sh = std::max(1, h / 2);
-    IconImage s;
-    s.width = sw + 2 * pad;
-    s.height = sh + 2 * pad;
-    s.bgra.assign(size_t(s.width) * s.height * 4, 0);
+    const int outW = sw + 2 * pad, outH = sh + 2 * pad;
+    std::vector<uint8_t> px(size_t(outW) * outH * 4, 0);
     const float sigma = float(pad) / 2.6f;
     auto edge = [&](float v, float len) {
         auto erfAt = [&](float t) { return 0.5f * (1 + std::erf(t / (sigma * std::numbers::sqrt2_v<float>))); };
         return erfAt(v) - erfAt(v - len);
     };
-    std::vector<float> fx(static_cast<size_t>(s.width)), fy(static_cast<size_t>(s.height));
-    for (int x = 0; x < s.width; ++x)
+    std::vector<float> fx(static_cast<size_t>(outW)), fy(static_cast<size_t>(outH));
+    for (int x = 0; x < outW; ++x)
         fx[size_t(x)] = edge(float(x) + 0.5f - float(pad), float(sw));
-    for (int y = 0; y < s.height; ++y)
+    for (int y = 0; y < outH; ++y)
         fy[size_t(y)] = edge(float(y) + 0.5f - float(pad), float(sh));
-    for (int y = 0; y < s.height; ++y)
-        for (int x = 0; x < s.width; ++x)
-            s.bgra[(size_t(y) * s.width + x) * 4 + 3] = uint8_t(std::lround(255 * std::clamp(fx[size_t(x)] * fy[size_t(y)], 0.f, 1.f)));
-    return s;
+    for (int y = 0; y < outH; ++y)
+        for (int x = 0; x < outW; ++x)
+            px[(size_t(y) * outW + x) * 4 + 3] = uint8_t(std::lround(255 * std::clamp(fx[size_t(x)] * fy[size_t(y)], 0.f, 1.f)));
+    return IconImage::FromBgra(outW, outH, std::move(px));
 }
 
 namespace {
@@ -105,19 +103,19 @@ WindowPicture Finish(std::vector<uint8_t> pixels, int w, int h, float radius, bo
     WindowPicture p;
     p.width = w;
     p.height = h;
-    p.image.width = w + 2 * kPicturePad;
-    p.image.height = h + 2 * kPicturePad;
-    p.image.bgra.assign(size_t(p.image.width) * p.image.height * 4, 0);
+    const int outW = w + 2 * kPicturePad, outH = h + 2 * kPicturePad;
+    std::vector<uint8_t> bgra(size_t(outW) * outH * 4, 0);
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x) {
             const float a = RoundedCoverage(x, y, w, h, radius) * (float(pixels[(size_t(y) * w + x) * 4 + 3]) / 255.f);
             const uint8_t* s = &pixels[(size_t(y) * w + x) * 4];
-            uint8_t* d = &p.image.bgra[(size_t(y + kPicturePad) * p.image.width + x + kPicturePad) * 4];
+            uint8_t* d = &bgra[(size_t(y + kPicturePad) * outW + x + kPicturePad) * 4];
             d[0] = uint8_t(std::lround(s[0] * a));
             d[1] = uint8_t(std::lround(s[1] * a));
             d[2] = uint8_t(std::lround(s[2] * a));
             d[3] = uint8_t(std::lround(255 * a));
         }
+    p.image = IconImage::FromBgra(outW, outH, std::move(bgra));
     if (shadow)
         p.shadow = SoftShadow(w, h);
     p.ok = true;
@@ -242,7 +240,7 @@ WindowPicture Smaller(const WindowPicture& picture, int largeMax)
     const float g = float(largeMax) / float(std::max(picture.width, picture.height));
     const int w = std::max(1, int(std::lround(picture.width * g))), h = std::max(1, int(std::lround(picture.height * g)));
     const int stride = picture.image.width * 4;
-    const uint8_t* src = picture.image.bgra.data() + size_t(kPicturePad) * stride + size_t(kPicturePad) * 4;
+    const uint8_t* src = picture.image.Data() + size_t(kPicturePad) * stride + size_t(kPicturePad) * 4;
     WindowPicture out = Finish(Shrink(src, picture.width, picture.height, stride, w, h), w, h, picture.corner * g, false);
     out.corner = picture.corner * g;
     return out;
@@ -258,13 +256,14 @@ WindowPicture PlaceholderPicture(const IconImage& icon, int width, int height, b
     }
     if (!icon.Empty()) {
         // The icon (premultiplied) over the panel, in the middle.
+        const uint8_t* iconData = icon.Data();
         const int ox = (width - icon.width) / 2, oy = (height - icon.height) / 2;
         for (int y = 0; y < icon.height; ++y)
             for (int x = 0; x < icon.width; ++x) {
                 const int dx = ox + x, dy = oy + y;
                 if (dx < 0 || dy < 0 || dx >= width || dy >= height)
                     continue;
-                const uint8_t* s = &icon.bgra[(size_t(y) * icon.width + x) * 4];
+                const uint8_t* s = &iconData[(size_t(y) * icon.width + x) * 4];
                 uint8_t* d = &px[(size_t(dy) * width + dx) * 4];
                 const int inv = 255 - s[3];
                 for (int c = 0; c < 3; ++c)
