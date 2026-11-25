@@ -136,8 +136,8 @@ std::vector<QuickLink> QuickLinks()
     items.push_back({0, Tr(L"Shut down or sign out"), true});
     items.push_back({SignOut, Tr(L"Sign out")});
     items.push_back({Sleep, Tr(L"Sleep")});
-    if (CanHibernate())
-        items.push_back({Hibernate, Tr(L"Hibernate")});
+    if (const HibernateMenuOption hiber = DescribeHibernateMenu(QueryHibernateCapability()); hiber.visible)
+        items.push_back({Hibernate, hiber.label});
     items.push_back({ShutDown, Tr(L"Shut down")});
     items.push_back({Restart, Tr(L"Restart")});
     items.push_back({});
@@ -145,7 +145,7 @@ std::vector<QuickLink> QuickLinks()
     return items;
 }
 
-void RunQuickLink(int id)
+void RunQuickLink(int id, HWND notifyHost, UINT noticeMsg)
 {
     if (id == Terminal || id == TerminalAdmin) {
         DispatchShellOpen(nullptr, id == TerminalAdmin, true);
@@ -180,10 +180,10 @@ void RunQuickLink(int id)
     case Search: SendWinKey('S'); break;
     case Desktop: SendWinKey('D'); break;
     case SignOut: ExitWindowsEx(EWX_LOGOFF, SHTDN_REASON_MAJOR_OTHER); break;
-    case Sleep: RunPowerAction(PowerAction::Sleep); break;
-    case Hibernate: RunPowerAction(PowerAction::Hibernate); break;
-    case ShutDown: RunPowerAction(PowerAction::Shutdown); break;
-    case Restart: RunPowerAction(PowerAction::Restart); break;
+    case Sleep: RunPowerAction(PowerAction::Sleep, notifyHost, noticeMsg); break;
+    case Hibernate: RunPowerAction(PowerAction::Hibernate, notifyHost, noticeMsg); break;
+    case ShutDown: RunPowerAction(PowerAction::Shutdown, notifyHost, noticeMsg); break;
+    case Restart: RunPowerAction(PowerAction::Restart, notifyHost, noticeMsg); break;
     default: break;
     }
 }

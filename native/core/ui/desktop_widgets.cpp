@@ -1,4 +1,5 @@
 #include "ui/desktop_widgets.h"
+#include "ui/widget_refresh_policy.h"
 #include "ui/widget_stacking.h"
 
 #include "localization.h"
@@ -157,8 +158,7 @@ IconImage ReadPhoto(const std::wstring& path, UINT w, UINT h)
         if (SUCCEEDED(meta->GetMetadataByName(L"System.Photo.Orientation", &v)) && v.vt == VT_UI2)
             turn = v.uiVal == 3 ? WICBitmapTransformRotate180 :
                    v.uiVal == 6 ? WICBitmapTransformRotate90 :
-                   v.uiVal == 8 ? WICBitmapTransformRotate270 :
-                                  WICBitmapTransformRotate0;
+                                  (v.uiVal == 8 ? WICBitmapTransformRotate270 : WICBitmapTransformRotate0);
         PropVariantClear(&v);
     }
     if (turn != WICBitmapTransformRotate0) {
@@ -180,10 +180,8 @@ IconImage ReadPhoto(const std::wstring& path, UINT w, UINT h)
         FAILED(conv->Initialize(scale.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom)))
         return out;
     out.bgra.resize(size_t(w) * h * 4);
-    if (FAILED(conv->CopyPixels(nullptr, w * 4, UINT(out.bgra.size()), out.bgra.data()))) {
-        out.bgra.clear();
-        return out;
-    }
+    if (FAILED(conv->CopyPixels(nullptr, w * 4, UINT(out.bgra.size()), out.bgra.data())))
+        return {};
     out.width = int(w);
     out.height = int(h);
     return out;
@@ -660,11 +658,8 @@ bool DesktopWidgets::ParseNames(const std::wstring& kind, const std::wstring& si
     return ParseKind(kind, outKind);
 }
 
-void DesktopWidgets::Remove(Widget& w)
-{
-    // Its window may be handling the message that asked for this.
-    PostMessageW(host_, WM_WIDGET_REMOVE, 0, reinterpret_cast<LPARAM>(&w));
-}
+// Its window may be handling the message that asked for this.
+void DesktopWidgets::Remove(Widget& w) { PostMessageW(host_, WM_WIDGET_REMOVE, 0, reinterpret_cast<LPARAM>(&w)); }
 
 void DesktopWidgets::RemoveNow(Widget& w)
 {
@@ -884,6 +879,7 @@ LRESULT CALLBACK DesktopWidgets::HostProc(HWND h, UINT m, WPARAM w, LPARAM l)
             return 0;
         case WM_TIMECHANGE:
             self->world_.city = LocalCity();
+            self->lastMinute_ = -1;
             self->Tick();
             return 0;
         default: break;
@@ -916,7 +912,8 @@ void DesktopWidgets::Tick()
     for (auto& w : widgets_) {
         if (!w->surface)
             continue;
-        if (w->kind == WidgetKind::Clock || minute || (sample && w->kind == WidgetKind::System) || (watching && w->kind == WidgetKind::Network))
+        if (w->kind == WidgetKind::Clock || (minute && WidgetNeedsMinuteRefresh(w->kind)) || (sample && w->kind == WidgetKind::System) ||
+            (watching && w->kind == WidgetKind::Network))
             w->surface->Invalidate();
         if (w->kind == WidgetKind::Photos && w->photoAt && now - w->photoAt > kPhotoMs)
             LoadPhoto(*w, true);
@@ -934,20 +931,22 @@ void DesktopWidgets::SampleSystem()
         cpuIdle_ = i;
         cpuTotal_ = total;
     }
-    MEMORYSTATUSEX ms{sizeof(ms)};
-    if (GlobalMemoryStatusEx(&ms)) {
-        constexpr double kGb = 1024.0 * 1024 * 1024;
+    constexpr double kGb = 1024.0 * 1024 * 1024;
+    if (MEMORYSTATUSEX ms{sizeof(ms)}; GlobalMemoryStatusEx(&ms)) {
         world_.memory = float(ms.dwMemoryLoad) / 100.f;
         world_.memoryTotalGb = double(ms.ullTotalPhys) / kGb;
         world_.memoryGb = double(ms.ullTotalPhys - ms.ullAvailPhys) / kGb;
     }
-    wchar_t windows[MAX_PATH] = {};
-    GetWindowsDirectoryW(windows, MAX_PATH);
-    std::wstring root = std::wstring(windows).substr(0, 3); // "C:\"
-    ULARGE_INTEGER avail{}, total{}, free{};
-    if (GetDiskFreeSpaceExW(root.c_str(), &avail, &total, &free) && total.QuadPart) {
-        world_.disk = 1.f - float(double(free.QuadPart) / double(total.QuadPart));
-        world_.diskFreeGb = double(avail.QuadPart) / (1024.0 * 1024 * 1024);
+    if (const ULONGLONG now = GetTickCount64(); ShouldSampleDisk(diskSampled_, now, lastDiskSampleMs_)) {
+        diskSampled_ = true;
+        lastDiskSampleMs_ = now;
+        wchar_t windows[MAX_PATH] = {};
+        GetWindowsDirectoryW(windows, MAX_PATH);
+        ULARGE_INTEGER avail{}, total{}, free{};
+        if (GetDiskFreeSpaceExW(std::wstring(windows).substr(0, 3).c_str(), &avail, &total, &free) && total.QuadPart) {
+            world_.disk = 1.f - float(double(free.QuadPart) / double(total.QuadPart));
+            world_.diskFreeGb = double(avail.QuadPart) / kGb;
+        }
     }
 }
 

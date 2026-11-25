@@ -32,6 +32,7 @@ public sealed partial class MainWindow
         bool dark = background.R + background.G + background.B < 3 * 128;
         RootGrid.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
         Tokens.SetDark(dark);
+        if (_moduleCards.Count > 0) RefreshModuleGallery();
         var bar = AppWindow.TitleBar;
         bar.ButtonForegroundColor = dark ? Microsoft.UI.Colors.White : Microsoft.UI.Colors.Black;
         bar.ButtonHoverForegroundColor = bar.ButtonPressedForegroundColor = bar.ButtonForegroundColor;

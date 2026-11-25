@@ -1,5 +1,6 @@
 // Start menu's popup menus and Windows Start sync.
 #include "ui/start_menu.h"
+#include "ui/start_menu_power_geom.h"
 
 #include "localization.h"
 #include "log.h"
@@ -432,8 +433,9 @@ void StartMenu::PaintPowerCard(Canvas& c, const Theme& t, std::vector<ShapeDip>&
 void StartMenu::PaintPower(Canvas& c, const Theme& t)
 {
     D2D1_RECT_F card = PowerRect();
+    const float k = 0.5f + 0.5f * powerGrow_;
     // The rows grow with the card from its corner; they fade in a little behind it.
-    c.BeginGroup(std::clamp((powerGrow_ - 0.15f) / 0.6f, 0.f, 1.f), 0.5f + 0.5f * powerGrow_, card.right, card.bottom);
+    c.BeginGroup(std::clamp((powerGrow_ - 0.15f) / 0.6f, 0.f, 1.f), k, card.right, card.bottom);
     constexpr float kRowInset = 8;
     const float rowR = std::max(4.f, PowerRadius() - kRowInset); // nested in the card's corners
     for (int i = 0; i < int(power_.size()); ++i) {
@@ -446,7 +448,7 @@ void StartMenu::PaintPower(Canvas& c, const Theme& t)
         c.Glyph(power_[size_t(i)].glyph, D2D1::RectF(row.left + 6, row.top, row.left + 38, row.bottom), 15, t.text);
         c.Text(power_[size_t(i)].name, D2D1::RectF(row.left + 44, row.top, row.right - 8, row.bottom), 14, t.text);
         if (powerOpen_)
-            hits_.push_back({row, id});
+            hits_.push_back({ScaleRectAbout(row, card.right, card.bottom, k), id});
     }
     c.EndGroup();
 }

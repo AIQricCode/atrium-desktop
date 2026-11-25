@@ -1301,7 +1301,7 @@ void InitializeSubsystems(HINSTANCE instance, Settings& settings)
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi);
     g_app.catalog->PrefetchStartIcons(StartMenu::TileIconPx(PopupScale(mi.rcWork)));
-    g_app.start->onSystem = OpenSystem;
+    g_app.start->onSystem = OpenSystem, g_app.start->SetPowerNotify(g_app.host, WM_NOTICE);
     g_app.start->menu = g_app.menu.get();
     g_app.notes = std::make_unique<Notifications>(instance);
     g_app.tray = std::make_unique<TrayModel>(g_app.host, WM_TRAY_ICONS, [] {

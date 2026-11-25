@@ -136,6 +136,8 @@ private:
     ChineseCalendar lunar_;
     int lastMinute_ = -1;
     uint64_t cpuIdle_ = 0, cpuTotal_ = 0; // the last GetSystemTimes
+    bool diskSampled_ = false;
+    ULONGLONG lastDiskSampleMs_ = 0;
     unsigned photoGen_ = 0;
     std::mutex photoMu_;
     std::condition_variable photoCv_;

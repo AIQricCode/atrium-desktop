@@ -2,6 +2,7 @@
 
 #include "bar_edge.h"
 #include "desktop_helpers.h"
+#include "host_messages.h"
 #include "localization.h"
 #include "log.h"
 #include "settings.h"
@@ -325,7 +326,7 @@ void ShowStartContextMenu(const AppMenuEnv& env, POINT pt)
     std::vector<MenuEntry> entries;
     for (const QuickLink& link : QuickLinks())
         entries.push_back({link.text, link.id, false, false, link.header});
-    env.menu->Open(std::move(entries), pt, BarMenuPlace(env.activeBar(), false), [](int id) { RunQuickLink(id); });
+    env.menu->Open(std::move(entries), pt, BarMenuPlace(env.activeBar(), false), [host = env.host](int id) { RunQuickLink(id, host, WM_NOTICE); });
 }
 
 void ShowAppMenu(const AppMenuEnv& env, const AppMenuTarget& target, POINT pt, MenuPlace place, std::function<void(bool)> done)

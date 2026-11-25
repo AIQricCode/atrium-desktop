@@ -656,7 +656,7 @@ public sealed partial class MainWindow : Window, IDisposable
         (_notifyCorner switch
         { "topLeft" => NotifyTopLeft, "bottomLeft" => NotifyBottomLeft, "bottomRight" => NotifyBottomRight, _ => NotifyTopRight }).IsChecked = true;
         RefreshSources();
-        BuildModuleGallery(); // also when the page already shows (opened on it, before the settings came)
+        if (ModuleGallery.Children.Count > 0) RefreshModuleGallery(); // also when the page already shows (opened on it, before the settings came)
         LoadExtras();
         BarSwitch.IsOn = CurrentSettings.Bar;
         UpdateBarModule();

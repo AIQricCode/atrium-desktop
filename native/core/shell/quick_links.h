@@ -1,6 +1,8 @@
 // Windows Win+X quick link menu items and their launch actions for the start logo right-click.
 #pragma once
 
+#include <windows.h>
+
 #include <string>
 #include <vector>
 
@@ -13,6 +15,6 @@ struct QuickLink {
 };
 
 std::vector<QuickLink> QuickLinks();
-void RunQuickLink(int id);
+void RunQuickLink(int id, HWND notifyHost = nullptr, UINT noticeMsg = 0);
 
 } // namespace atrium

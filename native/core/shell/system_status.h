@@ -3,6 +3,7 @@
 // Core Audio, Network List Manager, WLAN), and the power actions.
 #pragma once
 
+#include "notice.h"
 #include "status.h"
 
 #include <windows.h>
@@ -10,6 +11,7 @@
 
 #include <winrt/base.h>
 
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -57,7 +59,21 @@ void SetVolume(int percent); // 0..100; unmutes above 0
 bool ToggleMute();
 
 enum class PowerAction { Sleep, Hibernate, Restart, Shutdown };
+enum class HibernateCapability { Direct, NeedsEnable, Unsupported, QueryFailed };
+enum class PowerActionStatus { Ok, Cancelled, ElevationFailed, EnableFailed, HibernateFailed, Unsupported, QueryFailed };
+
+struct HibernateMenuOption {
+    bool visible = false;
+    bool needsEnable = false;
+    std::wstring label;
+};
+
+HibernateCapability ClassifyHibernateCapability(bool queryOk, const SYSTEM_POWER_CAPABILITIES& caps);
+HibernateCapability QueryHibernateCapability(DWORD* error = nullptr);
+HibernateMenuOption DescribeHibernateMenu(HibernateCapability capability);
+std::optional<Notice> BuildPowerActionNotice(PowerAction action, PowerActionStatus status);
 bool CanHibernate();
-bool RunPowerAction(PowerAction action);
+PowerActionStatus ExecuteHibernateAction(DWORD* error = nullptr);
+bool RunPowerAction(PowerAction action, HWND notifyHost = nullptr, UINT noticeMsg = 0);
 
 } // namespace atrium

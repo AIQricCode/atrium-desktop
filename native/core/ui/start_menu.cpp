@@ -84,6 +84,11 @@ D2D1_RECT_F Mix(const D2D1_RECT_F& a, const D2D1_RECT_F& b, float t)
 }
 constexpr wchar_t kHiddenHead = 1; // the heading of the hidden apps, after Z
 int LetterRank(wchar_t letter) { return letter == L'#' ? 0 : letter >= L'A' && letter <= L'Z' ? letter - L'A' + 1 : 27; }
+bool CompareAppNames(const std::wstring& a, const std::wstring& b)
+{
+    return CompareStringEx(LOCALE_NAME_USER_DEFAULT, NORM_IGNORECASE | SORT_DIGITSASNUMBERS, a.c_str(), int(a.size()), b.c_str(), int(b.size()), nullptr,
+                           nullptr, 0) == CSTR_LESS_THAN;
+}
 
 // An app taken out of the arrangement: a tile of its own or one of a folder's
 // (a folder left empty goes with it).
@@ -331,11 +336,10 @@ D2D1_RECT_F StartMenu::FolderCell(int slot) const
 
 D2D1_RECT_F StartMenu::PowerRect() const
 {
-    // In the panel's bottom right corner, over the power button at the capsule's end: the same inset from
-    // the panel's right and bottom edges.
     const D2D1_RECT_F main = MainRect();
+    const float w = std::ranges::any_of(power_, [](const PowerRow& row) { return row.name.size() > 14; }) ? 268.f : kPowerW;
     const float right = main.right - kPowerInset, bottom = main.bottom - kPowerInset, h = float(power_.size()) * kPowerRowH + 2 * kPowerPad;
-    return D2D1::RectF(right - kPowerW, bottom - h, right, bottom);
+    return D2D1::RectF(right - w, bottom - h, right, bottom);
 }
 
 float StartMenu::PowerRadius() const { return std::max(12.f, radius_ - kPowerInset); }
@@ -415,11 +419,12 @@ void StartMenu::Open(RECT bar, RECT logo, HWND previous)
     pressed_.clear();
     powerOpen_ = false;
     powerGrow_ = powerV_ = 0;
-    power_ = {{L"\uE708", Tr(L"Sleep"), PowerAction::Sleep},
-              {L"\uE823", Tr(L"Hibernate"), PowerAction::Hibernate},
-              {L"\uE72C", Tr(L"Restart"), PowerAction::Restart},
-              {L"\uE7E8", Tr(L"Shut down"), PowerAction::Shutdown},
-              {L"\uE72E", Tr(L"Lock"), std::nullopt}};
+    power_ = {{L"\uE708", Tr(L"Sleep"), PowerAction::Sleep}};
+    if (const HibernateMenuOption hiber = DescribeHibernateMenu(QueryHibernateCapability()); hiber.visible)
+        power_.push_back({L"\uE823", hiber.label, PowerAction::Hibernate});
+    power_.push_back({L"\uE72C", Tr(L"Restart"), PowerAction::Restart});
+    power_.push_back({L"\uE7E8", Tr(L"Shut down"), PowerAction::Shutdown});
+    power_.push_back({L"\uE72E", Tr(L"Lock"), std::nullopt});
     folder_ = -1;
     folderClosing_ = naming_ = false;
     drag_ = {};
@@ -683,27 +688,23 @@ std::vector<StartMenu::Row> StartMenu::AllApps() const
     struct Entry {
         wchar_t letter;
         Row row;
-        const std::wstring* name;
     };
     std::vector<Entry> entries;
     for (size_t i = 0; i < tiles_.size(); ++i)
         if (tiles_[i].folder)
-            entries.push_back({IndexLetter(tiles_[i].name), {0, int(i), {}}, &tiles_[i].name});
+            entries.push_back({IndexLetter(tiles_[i].name), {0, int(i), {}}});
     std::vector<CatalogApp> hidden;
     for (const CatalogApp& a : apps_) {
         if (Hidden(a.id))
             hidden.push_back(a);
         else
-            entries.push_back({IndexLetter(a.name), {0, -1, a}, nullptr});
+            entries.push_back({IndexLetter(a.name), {0, -1, a}});
     }
-    for (Entry& e : entries)
-        if (!e.name)
-            e.name = &e.row.app.name;
-    std::ranges::stable_sort(entries, [](const Entry& a, const Entry& b) {
+    auto nameOf = [&](const Entry& e) -> const std::wstring& { return e.row.folder >= 0 ? tiles_[size_t(e.row.folder)].name : e.row.app.name; };
+    std::ranges::stable_sort(entries, [&](const Entry& a, const Entry& b) {
         if (a.letter != b.letter)
             return LetterRank(a.letter) < LetterRank(b.letter);
-        return CompareStringEx(LOCALE_NAME_USER_DEFAULT, NORM_IGNORECASE | SORT_DIGITSASNUMBERS, a.name->c_str(), int(a.name->size()), b.name->c_str(),
-                               int(b.name->size()), nullptr, nullptr, 0) == CSTR_LESS_THAN;
+        return CompareAppNames(nameOf(a), nameOf(b));
     });
     std::vector<Row> out;
     wchar_t letter = 0;
@@ -716,10 +717,7 @@ std::vector<StartMenu::Row> StartMenu::AllApps() const
     }
     // The hidden apps last, under a heading of their own.
     if (!hidden.empty()) {
-        std::ranges::stable_sort(hidden, [](const CatalogApp& a, const CatalogApp& b) {
-            return CompareStringEx(LOCALE_NAME_USER_DEFAULT, NORM_IGNORECASE | SORT_DIGITSASNUMBERS, a.name.c_str(), int(a.name.size()), b.name.c_str(),
-                                   int(b.name.size()), nullptr, nullptr, 0) == CSTR_LESS_THAN;
-        });
+        std::ranges::stable_sort(hidden, [](const CatalogApp& a, const CatalogApp& b) { return CompareAppNames(a.name, b.name); });
         out.push_back({kHiddenHead, -1, {}});
         for (CatalogApp& a : hidden)
             out.push_back({0, -1, std::move(a)});
@@ -1998,7 +1996,7 @@ void StartMenu::RunPower(int index)
             onSystem(L"lock");
         return;
     }
-    RunPowerAction(*power_[size_t(index)].action);
+    RunPowerAction(*power_[size_t(index)].action, powerNotifyHost_, powerNoticeMsg_);
 }
 
 void StartMenu::Activate(const std::wstring& id)

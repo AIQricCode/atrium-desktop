@@ -36,33 +36,37 @@ public sealed partial class MainWindow
         _ => "Share this PC's internet",
     };
 
+    private sealed record ModuleCardHandles(
+        Button Button,
+        Ellipse Disc,
+        FontIcon Glyph,
+        TextBlock Title,
+        TextBlock State,
+        FontIcon Badge);
+
+    private readonly Dictionary<string, ModuleCardHandles> _moduleCards = [];
+
     private void BuildModuleGallery()
     {
+        _moduleCards.Clear();
         ModuleGallery.Children.Clear();
         foreach (string id in BarSettings.ControlModuleIds)
-            ModuleGallery.Children.Add(ModuleCard(id));
+            ModuleGallery.Children.Add(CreateModuleCard(id));
     }
 
-    private Button ModuleCard(string id)
+    private Button CreateModuleCard(string id)
     {
-        bool added = CurrentSettings.ControlModules.Contains(id);
-        var disc = new Ellipse { Width = 36, Height = 36, Fill = added ? Tokens.Brush("AccentBrush") : Tokens.Brush("FillBrush") };
-        var glyph = new FontIcon
-        {
-            Glyph = ModuleGlyph(id),
-            FontSize = 15,
-            Foreground = added ? new SolidColorBrush(Microsoft.UI.Colors.White) : Tokens.Brush("InkBrush"),
-        };
+        var disc = new Ellipse { Width = 36, Height = 36 };
+        var glyph = new FontIcon { Glyph = ModuleGlyph(id), FontSize = 15 };
         var mark = new Grid { Width = 36, Height = 36, VerticalAlignment = VerticalAlignment.Center, Children = { disc, glyph } };
-        var title = new TextBlock { Text = Loc.T(ModuleTitle(id)), Style = (Style)Application.Current.Resources["RowTitleStyle"] };
+        var title = new TextBlock { Style = (Style)Application.Current.Resources["RowTitleStyle"] };
         var state = new TextBlock
         {
-            Text = added ? Loc.T("In the control centre") : Loc.T(ModuleNote(id)),
             Style = (Style)Application.Current.Resources["FootnoteStyle"],
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         var words = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center, Children = { title, state } };
-        var badge = new FontIcon { Glyph = added ? "\uE73E" : "\uE710", FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+        var badge = new FontIcon { FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
         var body = new Grid { ColumnSpacing = 12 };
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -80,16 +84,36 @@ public sealed partial class MainWindow
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Background = Tokens.Brush("CardBrush"),
-            BorderBrush = added ? Tokens.Brush("AccentBrush") : Tokens.Brush("CardStrokeBrush"),
-            BorderThickness = new Thickness(added ? 1.5 : 1),
             TranslationTransition = new Vector3Transition { Duration = TimeSpan.FromMilliseconds(180) },
         };
         button.PointerEntered += (_, _) => button.Translation = new Vector3(0, -2, 0);
         button.PointerExited += (_, _) => button.Translation = Vector3.Zero;
-        AutomationProperties.SetName(button,
-            added ? Loc.F("Remove {0} from the control centre", title.Text) : Loc.F("Add {0} to the control centre", title.Text));
         button.Click += (_, _) => ToggleModule(id);
+        _moduleCards[id] = new ModuleCardHandles(button, disc, glyph, title, state, badge);
+        UpdateModuleCard(id);
         return button;
+    }
+
+    private void UpdateModuleCard(string id)
+    {
+        if (!_moduleCards.TryGetValue(id, out var card)) return;
+        bool added = CurrentSettings.ControlModules.Contains(id);
+        card.Disc.Fill = Tokens.Brush(added ? "AccentBrush" : "FillBrush");
+        card.Glyph.Foreground = added ? new SolidColorBrush(Microsoft.UI.Colors.White) : Tokens.Brush("InkBrush");
+        card.Title.Text = Loc.T(ModuleTitle(id));
+        card.State.Text = added ? Loc.T("In the control centre") : Loc.T(ModuleNote(id));
+        card.Badge.Glyph = added ? "\uE73E" : "\uE710";
+        card.Button.Background = Tokens.Brush("CardBrush");
+        card.Button.BorderBrush = Tokens.Brush(added ? "AccentBrush" : "CardStrokeBrush");
+        card.Button.BorderThickness = new Thickness(added ? 1.5 : 1);
+        AutomationProperties.SetName(card.Button,
+            added ? Loc.F("Remove {0} from the control centre", card.Title.Text) : Loc.F("Add {0} to the control centre", card.Title.Text));
+    }
+
+    private void RefreshModuleGallery()
+    {
+        foreach (string id in _moduleCards.Keys)
+            UpdateModuleCard(id);
     }
 
     private void ToggleModule(string id)
@@ -97,6 +121,6 @@ public sealed partial class MainWindow
         var modules = CurrentSettings.ControlModules;
         if (!modules.Remove(id)) modules.Add(id);
         Changed();
-        BuildModuleGallery();
+        UpdateModuleCard(id);
     }
 }

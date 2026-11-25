@@ -77,6 +77,11 @@ public:
     std::function<void(const PinnedApp&)> onPin;            // pin to the bar (the dock)
     std::function<void(const std::wstring& what)> onSystem; // "network", "volume", "battery", "tray", "account"
     std::function<void()> onStatusRequest;
+    void SetPowerNotify(HWND host, UINT message)
+    {
+        powerNotifyHost_ = host;
+        powerNoticeMsg_ = message;
+    }
     GlassMenu* menu = nullptr;                               // a tile's menu (main's)
 
 private:
@@ -103,7 +108,7 @@ private:
     };
     struct PowerRow {
         const wchar_t* glyph;
-        const wchar_t* name;
+        std::wstring name;
         std::optional<PowerAction> action; // empty: lock
     };
     // A tile carried by the pointer: from the grid, or out of the open folder.
@@ -320,6 +325,8 @@ private:
     float rippleX_ = 0, rippleY_ = 0;
     double rippleMs_ = 0;
     std::vector<PowerRow> power_;
+    HWND powerNotifyHost_ = nullptr;
+    UINT powerNoticeMsg_ = 0;
     bool powerOpen_ = false;
     int powerSel_ = -1;
     float powerGrow_ = 0, powerV_ = 0; // the card's spring: 0 folded into the corner, 1 open

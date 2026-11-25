@@ -171,3 +171,19 @@ add_executable(ime_bubble_tests ime_bubble.cpp ../core/ui/ime_bubble_model.cpp)
 target_include_directories(ime_bubble_tests PRIVATE ../core)
 target_compile_definitions(ime_bubble_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_test(NAME ime_bubble COMMAND ime_bubble_tests)
+
+add_executable(start_menu_sort_tests start_menu_sort.cpp)
+target_link_libraries(start_menu_sort_tests PRIVATE atrium_core_lib)
+add_test(NAME start_menu_sort COMMAND start_menu_sort_tests)
+
+add_executable(hibernate_status_tests hibernate_status.cpp)
+target_link_libraries(hibernate_status_tests PRIVATE atrium_core_lib)
+add_test(NAME hibernate_status COMMAND hibernate_status_tests)
+
+add_executable(power_card_hit_tests power_card_hit.cpp)
+target_link_libraries(power_card_hit_tests PRIVATE atrium_core_lib)
+add_test(NAME power_card_hit COMMAND power_card_hit_tests)
+
+add_executable(widget_refresh_tests widget_refresh.cpp)
+target_link_libraries(widget_refresh_tests PRIVATE atrium_core_lib)
+add_test(NAME widget_refresh COMMAND widget_refresh_tests)

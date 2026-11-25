@@ -6,6 +6,7 @@
 
 #include "shell/system_status.h"
 
+#include "localization.h"
 #include "log.h"
 #include "shell/wifi.h"
 #include "../posted.h"
@@ -365,43 +366,216 @@ bool ToggleMute()
     return true;
 }
 
-bool CanHibernate()
+namespace {
+
+struct HibernateWorkerJob {
+    HWND notifyHost = nullptr;
+    UINT noticeMsg = 0;
+};
+
+void EnableShutdownPrivilege()
 {
-    SYSTEM_POWER_CAPABILITIES c{};
-    return GetPwrCapabilities(&c) && c.SystemS4 && c.HiberFilePresent;
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
+        return;
+    TOKEN_PRIVILEGES tp{};
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (LookupPrivilegeValueW(nullptr, SE_SHUTDOWN_NAME, &tp.Privileges[0].Luid))
+        AdjustTokenPrivileges(token, FALSE, &tp, 0, nullptr, nullptr);
+    CloseHandle(token);
 }
 
-bool RunPowerAction(PowerAction action)
+std::wstring SystemPowerCfgPath()
+{
+    wchar_t sys[MAX_PATH]{};
+    const UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+    if (!n || n >= MAX_PATH)
+        return L"powercfg.exe";
+    return std::wstring(sys, n) + L"\\powercfg.exe";
+}
+
+void PostPowerNotice(HWND notifyHost, UINT noticeMsg, PowerAction action, PowerActionStatus status)
+{
+    if (!notifyHost || !noticeMsg)
+        return;
+    if (auto notice = BuildPowerActionNotice(action, status))
+        PostOwned(notifyHost, noticeMsg, 0, std::make_unique<Notice>(std::move(*notice)));
+}
+
+VOID CALLBACK HibernateWorkerProc(PTP_CALLBACK_INSTANCE, PVOID context)
+{
+    const std::unique_ptr<HibernateWorkerJob> job(static_cast<HibernateWorkerJob*>(context));
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    DWORD err = 0;
+    const PowerActionStatus status = ExecuteHibernateAction(&err);
+    if (status != PowerActionStatus::Ok)
+        PostPowerNotice(job->notifyHost, job->noticeMsg, PowerAction::Hibernate, status);
+    if (SUCCEEDED(com))
+        CoUninitialize();
+}
+
+} // namespace
+
+HibernateCapability ClassifyHibernateCapability(bool queryOk, const SYSTEM_POWER_CAPABILITIES& caps)
+{
+    if (!queryOk)
+        return HibernateCapability::QueryFailed;
+    if (!caps.SystemS4)
+        return HibernateCapability::Unsupported;
+    return caps.HiberFilePresent ? HibernateCapability::Direct : HibernateCapability::NeedsEnable;
+}
+
+HibernateCapability QueryHibernateCapability(DWORD* error)
+{
+    SYSTEM_POWER_CAPABILITIES c{};
+    if (!GetPwrCapabilities(&c)) {
+        const DWORD err = GetLastError();
+        if (error)
+            *error = err;
+        Log(L"power: GetPwrCapabilities failed (%lu)", err);
+        return HibernateCapability::QueryFailed;
+    }
+    if (error)
+        *error = 0;
+    return ClassifyHibernateCapability(true, c);
+}
+
+HibernateMenuOption DescribeHibernateMenu(HibernateCapability capability)
+{
+    switch (capability) {
+    case HibernateCapability::Direct: return {true, false, Tr(L"Hibernate")};
+    case HibernateCapability::NeedsEnable: return {true, true, Tr(L"Enable hibernation and hibernate")};
+    case HibernateCapability::Unsupported:
+    case HibernateCapability::QueryFailed: break;
+    }
+    return {};
+}
+
+std::optional<Notice> BuildPowerActionNotice(PowerAction action, PowerActionStatus status)
+{
+    if (status == PowerActionStatus::Ok || action != PowerAction::Hibernate)
+        return std::nullopt;
+    Notice notice;
+    notice.source = L"atrium";
+    notice.app = L"Atrium";
+    notice.unread = false;
+    switch (status) {
+    case PowerActionStatus::Cancelled:
+        notice.title = Tr(L"Hibernation cancelled");
+        notice.body = Tr(L"Administrator permission is required to enable hibernation.");
+        return notice;
+    case PowerActionStatus::ElevationFailed:
+        notice.title = Tr(L"Could not enable hibernation");
+        notice.body = Tr(L"Administrator permission could not be requested.");
+        return notice;
+    case PowerActionStatus::EnableFailed:
+        notice.title = Tr(L"Could not enable hibernation");
+        notice.body = Tr(L"Enabling hibernation failed. Check power settings or free disk space.");
+        return notice;
+    case PowerActionStatus::QueryFailed:
+        notice.title = Tr(L"Could not check hibernation");
+        notice.body = Tr(L"Could not read the system's hibernation state.");
+        return notice;
+    case PowerActionStatus::Unsupported:
+        notice.title = Tr(L"Hibernation is unavailable");
+        notice.body = Tr(L"This PC does not support hibernation.");
+        return notice;
+    case PowerActionStatus::HibernateFailed:
+    case PowerActionStatus::Ok:
+        notice.title = Tr(L"Could not hibernate");
+        notice.body = Tr(L"Windows did not enter hibernation.");
+        return notice;
+    }
+    return notice;
+}
+
+bool CanHibernate() { return QueryHibernateCapability() == HibernateCapability::Direct; }
+
+PowerActionStatus ExecuteHibernateAction(DWORD* error)
+{
+    DWORD err = 0;
+    HibernateCapability cap = QueryHibernateCapability(&err);
+    if (cap == HibernateCapability::QueryFailed) {
+        if (error)
+            *error = err;
+        return PowerActionStatus::QueryFailed;
+    }
+    if (cap == HibernateCapability::Unsupported)
+        return PowerActionStatus::Unsupported;
+    if (cap == HibernateCapability::NeedsEnable) {
+        Log(L"power: hibernation is disabled; requesting elevation to enable and hibernate");
+        const std::wstring powercfg = SystemPowerCfgPath();
+        SHELLEXECUTEINFOW sei{sizeof(sei)};
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
+        sei.lpVerb = L"runas";
+        sei.lpFile = powercfg.c_str();
+        sei.lpParameters = L"/h on";
+        sei.nShow = SW_HIDE;
+        if (!ShellExecuteExW(&sei)) {
+            err = GetLastError();
+            if (error)
+                *error = err;
+            if (err == ERROR_CANCELLED) {
+                Log(L"power: hibernate elevation cancelled by user");
+                return PowerActionStatus::Cancelled;
+            }
+            Log(L"power: failed to elevate hibernate enablement (%lu)", err);
+            return PowerActionStatus::ElevationFailed;
+        }
+        DWORD exitCode = 1;
+        if (sei.hProcess) {
+            const DWORD wait = WaitForSingleObject(sei.hProcess, 60000);
+            if (wait != WAIT_OBJECT_0 || !GetExitCodeProcess(sei.hProcess, &exitCode))
+                exitCode = 1;
+            CloseHandle(sei.hProcess);
+        }
+        if (exitCode != 0) {
+            if (error)
+                *error = exitCode;
+            Log(L"power: powercfg /h on failed (%lu)", exitCode);
+            return PowerActionStatus::EnableFailed;
+        }
+        if (QueryHibernateCapability(&err) != HibernateCapability::Direct) {
+            if (error)
+                *error = err;
+            Log(L"power: hibernation still unavailable after enabling (%lu)", err);
+            return PowerActionStatus::EnableFailed;
+        }
+    }
+    EnableShutdownPrivilege();
+    if (!SetSuspendState(TRUE, FALSE, FALSE)) {
+        err = GetLastError();
+        if (error)
+            *error = err;
+        Log(L"power: SetSuspendState(hibernate) failed (%lu)", err);
+        return PowerActionStatus::HibernateFailed;
+    }
+    return PowerActionStatus::Ok;
+}
+
+bool RunPowerAction(PowerAction action, HWND notifyHost, UINT noticeMsg)
 {
     const wchar_t* names[] = {L"sleep", L"hibernate", L"restart", L"shutdown"};
     Log(L"power: %s", names[int(action)]);
     if (action == PowerAction::Sleep)
         return SetSuspendState(FALSE, FALSE, FALSE) != FALSE;
     if (action == PowerAction::Hibernate) {
-        if (CanHibernate()) {
-            const bool ok = SetSuspendState(TRUE, FALSE, FALSE) != FALSE;
-            if (!ok)
-                Log(L"power: SetSuspendState(hibernate) failed (%lu)", GetLastError());
-            return ok;
+        if (notifyHost && noticeMsg) {
+            auto job = std::make_unique<HibernateWorkerJob>(HibernateWorkerJob{notifyHost, noticeMsg});
+            if (TrySubmitThreadpoolCallback(HibernateWorkerProc, job.get(), nullptr)) {
+                [[maybe_unused]] HibernateWorkerJob* raw = job.release();
+                return true;
+            }
+            Log(L"power: threadpool dispatch failed (%lu)", GetLastError());
+            PostPowerNotice(notifyHost, noticeMsg, PowerAction::Hibernate, PowerActionStatus::HibernateFailed);
+            return false;
         }
-        Log(L"power: hibernation is disabled; requesting elevation to enable and hibernate");
-        HINSTANCE launched = ShellExecuteW(nullptr, L"runas", L"cmd.exe", L"/c powercfg /h on && shutdown /h", nullptr, SW_HIDE);
-        const bool ok = reinterpret_cast<INT_PTR>(launched) > 32;
-        if (!ok)
-            Log(L"power: failed to elevate hibernate enablement (%Id)", reinterpret_cast<INT_PTR>(launched));
-        return ok;
+        return ExecuteHibernateAction() == PowerActionStatus::Ok;
     }
     // Shutting down needs SeShutdownPrivilege enabled in the token (every
     // interactive user has it, disabled by default).
-    HANDLE token = nullptr;
-    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
-        TOKEN_PRIVILEGES tp{};
-        tp.PrivilegeCount = 1;
-        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-        if (LookupPrivilegeValueW(nullptr, SE_SHUTDOWN_NAME, &tp.Privileges[0].Luid))
-            AdjustTokenPrivileges(token, FALSE, &tp, 0, nullptr, nullptr);
-        CloseHandle(token);
-    }
+    EnableShutdownPrivilege();
     UINT flags = action == PowerAction::Restart ? EWX_REBOOT : EWX_SHUTDOWN | EWX_POWEROFF;
     bool ok = ExitWindowsEx(flags, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_FLAG_PLANNED) != FALSE;
     if (!ok)
