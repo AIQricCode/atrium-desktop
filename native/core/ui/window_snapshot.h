@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -37,6 +38,10 @@ WindowPicture PlaceholderPicture(const IconImage& icon, int width, int height, b
 
 // `picture` (a large one, no shadow) at most `largeMax` px either way.
 WindowPicture Smaller(const WindowPicture& picture, int largeMax);
+
+// Builds a premultiplied rounded snapshot from BGRA pixels (`sw` x `sh`, byte `stride`)
+// at size `tw` x `th`, preserving legacy area-average math without full-image temp buffers.
+WindowPicture BuildWindowPictureFromBgra(const uint8_t* src, int sw, int sh, int stride, int tw, int th, float radius, bool shadow = true);
 
 class WindowSnapshots {
 public:

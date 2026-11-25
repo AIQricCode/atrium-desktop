@@ -27,37 +27,6 @@ float RoundedCoverage(int x, int y, int w, int h, float r)
     return std::clamp(r + 0.5f - d, 0.f, 1.f);
 }
 
-// Area average of `src` (sw x sh BGRA, stride sw) into tw x th.
-std::vector<uint8_t> Shrink(const uint8_t* src, int sw, int sh, int stride, int tw, int th)
-{
-    std::vector<uint32_t> sum(size_t(tw) * th * 3, 0), count(size_t(tw) * th, 0);
-    std::vector<int> col(static_cast<size_t>(sw));
-    for (int x = 0; x < sw; ++x)
-        col[size_t(x)] = std::min(tw - 1, int(int64_t(x) * tw / sw));
-    for (int y = 0; y < sh; ++y) {
-        const int ty = std::min(th - 1, int(int64_t(y) * th / sh));
-        const uint8_t* row = src + size_t(y) * stride;
-        uint32_t* s = sum.data() + size_t(ty) * tw * 3;
-        uint32_t* n = count.data() + size_t(ty) * tw;
-        for (int x = 0; x < sw; ++x) {
-            const int tx = col[size_t(x)];
-            s[tx * 3] += row[x * 4];
-            s[tx * 3 + 1] += row[x * 4 + 1];
-            s[tx * 3 + 2] += row[x * 4 + 2];
-            ++n[tx];
-        }
-    }
-    std::vector<uint8_t> out(size_t(tw) * th * 4);
-    for (size_t i = 0; i < size_t(tw) * th; ++i) {
-        const uint32_t n = std::max<uint32_t>(1, count[i]);
-        out[i * 4] = uint8_t(sum[i * 3] / n);
-        out[i * 4 + 1] = uint8_t(sum[i * 3 + 1] / n);
-        out[i * 4 + 2] = uint8_t(sum[i * 3 + 2] / n);
-        out[i * 4 + 3] = 255;
-    }
-    return out;
-}
-
 // All-zero buffers and near-uniform frames (not yet drawn) are blank; 32+ differing pixels indicate content.
 bool Blank(const uint8_t* src, int w, int h, int stride)
 {
@@ -98,31 +67,72 @@ IconImage SoftShadow(int w, int h)
     return IconImage::FromBgra(outW, outH, std::move(px));
 }
 
-namespace {
-
-WindowPicture Finish(std::vector<uint8_t> pixels, int w, int h, float radius, bool shadow = true)
+WindowPicture BuildWindowPictureFromBgra(const uint8_t* src, int sw, int sh, int stride, int tw, int th, float radius, bool shadow)
 {
+    if (!src || sw <= 0 || sh <= 0 || tw <= 0 || th <= 0 || stride < sw * 4)
+        return {};
     WindowPicture p;
-    p.width = w;
-    p.height = h;
-    const int outW = w + 2 * kPicturePad, outH = h + 2 * kPicturePad;
+    p.width = tw;
+    p.height = th;
+    const int outW = tw + 2 * kPicturePad, outH = th + 2 * kPicturePad;
     std::vector<uint8_t> bgra(size_t(outW) * outH * 4, 0);
-    for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x) {
-            const float a = RoundedCoverage(x, y, w, h, radius) * (float(pixels[(size_t(y) * w + x) * 4 + 3]) / 255.f);
-            const uint8_t* s = &pixels[(size_t(y) * w + x) * 4];
-            uint8_t* d = &bgra[(size_t(y + kPicturePad) * outW + x + kPicturePad) * 4];
-            d[0] = uint8_t(std::lround(s[0] * a));
-            d[1] = uint8_t(std::lround(s[1] * a));
-            d[2] = uint8_t(std::lround(s[2] * a));
-            d[3] = uint8_t(std::lround(255 * a));
+    auto writePixel = [&](int x, int y, uint8_t b, uint8_t g, uint8_t r) {
+        const float a = RoundedCoverage(x, y, tw, th, radius);
+        uint8_t* d = &bgra[(size_t(y + kPicturePad) * outW + x + kPicturePad) * 4];
+        d[0] = uint8_t(std::lround(b * a));
+        d[1] = uint8_t(std::lround(g * a));
+        d[2] = uint8_t(std::lround(r * a));
+        d[3] = uint8_t(std::lround(255 * a));
+    };
+    if (sw == tw && sh == th) {
+        for (int y = 0; y < th; ++y) {
+            const uint8_t* row = src + size_t(y) * stride;
+            for (int x = 0; x < tw; ++x) {
+                const uint8_t* s = row + size_t(x) * 4;
+                writePixel(x, y, s[0], s[1], s[2]);
+            }
         }
+    } else {
+        std::vector<int> col(static_cast<size_t>(sw));
+        for (int x = 0; x < sw; ++x)
+            col[size_t(x)] = std::min(tw - 1, int(int64_t(x) * tw / sw));
+        std::vector<uint64_t> rowSum(size_t(tw) * 3, 0);
+        std::vector<uint32_t> rowCount(size_t(tw), 0);
+        auto flushRow = [&](int ty) {
+            for (int tx = 0; tx < tw; ++tx) {
+                const uint32_t n = std::max<uint32_t>(1, rowCount[size_t(tx)]);
+                const size_t idx = size_t(tx) * 3;
+                writePixel(tx, ty, uint8_t(rowSum[idx] / n), uint8_t(rowSum[idx + 1] / n), uint8_t(rowSum[idx + 2] / n));
+            }
+            std::fill(rowSum.begin(), rowSum.end(), 0);
+            std::fill(rowCount.begin(), rowCount.end(), 0);
+        };
+        int curTy = 0;
+        for (int y = 0; y < sh; ++y) {
+            const int ty = std::min(th - 1, int(int64_t(y) * th / sh));
+            while (curTy < ty)
+                flushRow(curTy++);
+            const uint8_t* row = src + size_t(y) * stride;
+            for (int x = 0; x < sw; ++x) {
+                const size_t tx = size_t(col[size_t(x)]);
+                const uint8_t* s = row + size_t(x) * 4;
+                rowSum[tx * 3] += s[0];
+                rowSum[tx * 3 + 1] += s[1];
+                rowSum[tx * 3 + 2] += s[2];
+                ++rowCount[tx];
+            }
+        }
+        while (curTy < th)
+            flushRow(curTy++);
+    }
     p.image = IconImage::FromBgra(outW, outH, std::move(bgra));
     if (shadow)
-        p.shadow = SoftShadow(w, h);
+        p.shadow = SoftShadow(tw, th);
     p.ok = true;
     return p;
 }
+
+namespace {
 
 // The window's own corners, px: rounded on Windows 11 (unless maximized, or the app asks otherwise),
 // square before.
@@ -164,13 +174,13 @@ WindowPicture BuildPictures(HWND window, const uint8_t* src, int pw, int ph, int
 {
     const float f = std::min({1.f, float(maxWidth) / float(pw), float(maxHeight) / float(ph)});
     const int tw = std::max(1, int(std::lround(pw * f))), th = std::max(1, int(std::lround(ph * f)));
-    WindowPicture result = Finish(Shrink(src, pw, ph, stride, tw, th), tw, th, radius);
+    WindowPicture result = BuildWindowPictureFromBgra(src, pw, ph, stride, tw, th, radius);
     if (largeMax > 0 && large) {
         // Near the window's own size, with its own corners: where it flies to its place.
         const float g = std::min(1.f, float(largeMax) / float(std::max(pw, ph)));
         const int lw = std::max(1, int(std::lround(pw * g))), lh = std::max(1, int(std::lround(ph * g)));
         const float cr = CornerRadius(window) * g;
-        *large = Finish(Shrink(src, pw, ph, stride, lw, lh), lw, lh, cr, false);
+        *large = BuildWindowPictureFromBgra(src, pw, ph, stride, lw, lh, cr, false);
         large->corner = cr;
     }
     return result;
@@ -276,7 +286,7 @@ WindowPicture Smaller(const WindowPicture& picture, int largeMax)
     const int w = std::max(1, int(std::lround(picture.width * g))), h = std::max(1, int(std::lround(picture.height * g)));
     const int stride = picture.image.width * 4;
     const uint8_t* src = picture.image.Data() + size_t(kPicturePad) * stride + size_t(kPicturePad) * 4;
-    WindowPicture out = Finish(Shrink(src, picture.width, picture.height, stride, w, h), w, h, picture.corner * g, false);
+    WindowPicture out = BuildWindowPictureFromBgra(src, picture.width, picture.height, stride, w, h, picture.corner * g, false);
     out.corner = picture.corner * g;
     return out;
 }
@@ -305,7 +315,7 @@ WindowPicture PlaceholderPicture(const IconImage& icon, int width, int height, b
                     d[c] = uint8_t(std::min(255, s[c] + d[c] * inv / 255));
             }
     }
-    return Finish(std::move(px), width, height, float(std::max(6, width / 24)));
+    return BuildWindowPictureFromBgra(px.data(), width, height, width * 4, width, height, float(std::max(6, width / 24)));
 }
 
 WindowSnapshots::WindowSnapshots(HWND notify, UINT message)

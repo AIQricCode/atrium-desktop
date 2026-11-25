@@ -203,3 +203,7 @@ add_test(NAME panel_capture_crop COMMAND panel_capture_crop_tests)
 add_executable(desktop_backdrop_target_tests desktop_backdrop_target.cpp)
 target_link_libraries(desktop_backdrop_target_tests PRIVATE atrium_core_lib)
 add_test(NAME desktop_backdrop_target COMMAND desktop_backdrop_target_tests)
+
+add_executable(window_snapshot_tests window_snapshot.cpp)
+target_link_libraries(window_snapshot_tests PRIVATE atrium_core_lib)
+add_test(NAME window_snapshot COMMAND window_snapshot_tests)
