@@ -357,6 +357,18 @@ void CheckFullscreenCoverage()
     Require(covered({{primary, {}}, fullscreen}), "empty frames do not override a full-screen app");
     Require(WindowCoverOnMonitor(external, leftScreen, false, external, leftScreen) == true, "full-screen detection supports negative display coordinates");
 
+    const RECT work{0, 0, 1920, 1032}, padded{-8, -8, 1928, 1040}, borderlessMax{-8, -8, 1928, 1088};
+    Require(IsFullscreenWindowBounds(screen, screen, screen, work, WS_POPUP, false), "unmaximized fullscreen covers monitor");
+    Require(IsFullscreenWindowBounds(borderlessMax, screen, screen, work, WS_POPUP | WS_MAXIMIZE, true),
+            "Edge F11 fullscreen entered from maximized without caption still counts as fullscreen");
+    Require(!IsFullscreenWindowBounds(screen, screen, screen, screen, WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, true),
+            "ordinary captioned maximized window with full work area is not fullscreen");
+    Require(!IsFullscreenWindowBounds(padded, work, screen, work, WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, true),
+            "captioned maximized window bounded by work area is not fullscreen");
+    Require(IsFullscreenWindowBounds(screen, screen, screen, work, WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, true),
+            "window extending past reduced work area with full extended frame is fullscreen");
+    Require(!IsFullscreenWindowBounds(normal.frame, normal.frame, screen, work, WS_OVERLAPPEDWINDOW, false), "normal window does not cover monitor");
+
     const RECT left{0, 0, 960, 1080}, right{960, 0, 1920, 1080}, gapRight{965, 0, 1920, 1080};
     Require(IsTile(left, screen, 8) && IsTile({960, 540, 1920, 1080}, screen, 8), "halves and quarters are tiles");
     Require(!IsTile({100, 100, 900, 700}, screen, 8) && !IsTile({-500, 0, 960, 1080}, screen, 8), "floating or off-screen windows are not tiles");
@@ -505,8 +517,8 @@ void CheckNotificationQuietState()
     for (QUERY_USER_NOTIFICATION_STATE s : states) {
         for (int mask = 0; mask < 16; ++mask) {
             const bool ours = (mask & 1) != 0, fs = (mask & 2) != 0, opt = (mask & 4) != 0, game = (mask & 8) != 0;
-            const bool expected =
-                s == QUNS_ACCEPTS_NOTIFICATIONS || s == QUNS_APP || (s == QUNS_QUIET_TIME && ours) || (s == QUNS_BUSY && (!fs || (opt && !game)));
+            const bool allowFs = !fs || (opt && !game);
+            const bool expected = (s == QUNS_QUIET_TIME && ours) || ((s == QUNS_ACCEPTS_NOTIFICATIONS || s == QUNS_APP || s == QUNS_BUSY) && allowFs);
             Require(notification::AcceptsNotificationPopup(s, ours, fs, opt, game) == expected, "notification quiet-state decision matches rule");
         }
     }

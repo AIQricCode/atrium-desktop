@@ -33,6 +33,19 @@ bool TilesFill(const std::vector<RECT>& tiles, const RECT& work, int slack);
 bool AtDisplayEdge(BarEdge edge, POINT pointer, const RECT& bounds); // 2 px strip on `edge`, strictly inside this display
 bool AtDisplayEdge(BarEdge edge, POINT pointer, const RECT& bounds, LONG margin);
 constexpr LONG FollowEdgeMargin(bool armed) { return armed ? 16 : 4; }
+// Pure predicate: whether a window covers `monitorRect` as a fullscreen app rather than a normal captioned maximized window.
+inline bool IsFullscreenWindowBounds(const RECT& windowRect, const RECT& extendedFrame, const RECT& monitorRect, const RECT& workRect, DWORD style, bool zoomed)
+{
+    auto covers = [&](const RECT& r) {
+        return r.left <= monitorRect.left && r.top <= monitorRect.top && r.right >= monitorRect.right && r.bottom >= monitorRect.bottom;
+    };
+    if (!covers(windowRect))
+        return false;
+    if (!zoomed || (style & WS_CAPTION) != WS_CAPTION)
+        return true;
+    return !EqualRect(&workRect, &monitorRect) && covers(extendedFrame);
+}
+
 // The app in front on `monitor` fills the whole screen (a game, a video, F11), not just its work
 // area, or a game holds the screen exclusively: as with Windows' taskbar, the pointer at the
 // screen's edges brings nothing up over it (a full-screen game losing the top drops to the desktop).

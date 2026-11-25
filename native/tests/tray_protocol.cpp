@@ -64,13 +64,16 @@ void TestYieldPolicy()
         Check(!p.OnFirst() && p.rapidLosses == 0, "OnFirst resets count after backoff recovery");
     }
 
-    // 3. StartAllBack stays permanently yielded across > 60s, clearing only on a new shellPid without StartAllBack.
+    // 3. StartAllBack stays permanently yielded across > 60s and OnFirst(), clearing only on a new shellPid without StartAllBack.
     {
         TrayHostYieldPolicy p;
-        Check(!p.OnShellPid(200, true), "StartAllBack shell pid set");
+        Check(!p.OnShellPid(200, true) && p.Yielded() && p.Reason() == TrayHostYieldReason::StartAllBack,
+              "StartAllBack yields immediately on shell pid detection");
+        Check(!p.OnFirst() && p.Yielded() && p.Reason() == TrayHostYieldReason::StartAllBack,
+              "StartAllBack stays yielded even if our hidden window becomes first");
         bool newlyYielded = false;
-        Check(!p.OnExplorerFirst(1000, newlyYielded) && newlyYielded && p.Yielded() && p.Reason() == TrayHostYieldReason::StartAllBack,
-              "StartAllBack yields on first Explorer check");
+        Check(!p.OnExplorerFirst(1000, newlyYielded) && !newlyYielded && p.Yielded() && p.Reason() == TrayHostYieldReason::StartAllBack,
+              "StartAllBack remains yielded on Explorer first check");
         Check(!p.OnExplorerFirst(100000, newlyYielded) && !newlyYielded && p.Yielded() && p.Reason() == TrayHostYieldReason::StartAllBack,
               "StartAllBack stays yielded past 60s");
         Check(!p.OnOtherProcess() && p.Reason() == TrayHostYieldReason::StartAllBack, "StartAllBack reason preserved across OnOtherProcess");

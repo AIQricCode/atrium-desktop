@@ -195,16 +195,16 @@ int Notifications::QuietState() const
     QUERY_USER_NOTIFICATION_STATE state = QUNS_ACCEPTS_NOTIFICATIONS;
     if (FAILED(SHQueryUserNotificationState(&state)))
         return QUNS_ACCEPTS_NOTIFICATIONS;
-    const HMONITOR fgMon = state == QUNS_BUSY ? MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY) : nullptr;
-    const bool fs = fgMon && FullScreenInFront(fgMon);
-    bool game = false;
-    if (fs && notifyFullscreen_) {
-        const RECT bar = corner_ ? RECT{} : (barRect ? barRect() : (bellRect ? bellRect() : RECT{}));
-        const HMONITOR popMon = MonitorFromRect(&bar, MONITOR_DEFAULTTOPRIMARY);
-        game = GameInFront(fgMon) || (popMon != fgMon && GameInFront(popMon));
-    }
+    const bool checkFs = state == QUNS_BUSY || state == QUNS_ACCEPTS_NOTIFICATIONS || state == QUNS_APP;
+    const HMONITOR fgMon = checkFs ? MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONULL) : nullptr;
+    const RECT bar = corner_ ? RECT{} : (barRect ? barRect() : (bellRect ? bellRect() : RECT{}));
+    const HMONITOR popMon = checkFs ? MonitorFromRect(&bar, MONITOR_DEFAULTTOPRIMARY) : nullptr;
+    const bool fs = (fgMon && FullScreenInFront(fgMon)) || (popMon && popMon != fgMon && FullScreenInFront(popMon));
+    const bool game = fs && notifyFullscreen_ && ((fgMon && GameInFront(fgMon)) || (popMon && popMon != fgMon && GameInFront(popMon)));
     const bool ours = state == QUNS_QUIET_TIME && quietIsOurs && quietIsOurs();
-    return notification::AcceptsNotificationPopup(state, ours, fs, notifyFullscreen_, game) ? QUNS_ACCEPTS_NOTIFICATIONS : int(state);
+    if (notification::AcceptsNotificationPopup(state, ours, fs, notifyFullscreen_, game))
+        return QUNS_ACCEPTS_NOTIFICATIONS;
+    return (state == QUNS_ACCEPTS_NOTIFICATIONS || state == QUNS_APP) ? int(QUNS_BUSY) : int(state);
 }
 
 void Notifications::ResetView(View& v)

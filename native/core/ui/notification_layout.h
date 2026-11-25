@@ -43,9 +43,9 @@ inline bool AcceptsNotificationPopup(QUERY_USER_NOTIFICATION_STATE state, bool q
 {
     switch (state) {
     case QUNS_ACCEPTS_NOTIFICATIONS:
-    case QUNS_APP: return true;
-    case QUNS_QUIET_TIME: return quietIsOurs;
+    case QUNS_APP:
     case QUNS_BUSY: return !fullScreenInFront || (notifyFullscreen && !gameInFront);
+    case QUNS_QUIET_TIME: return quietIsOurs;
     case QUNS_RUNNING_D3D_FULL_SCREEN:
     case QUNS_PRESENTATION_MODE:
     case QUNS_NOT_PRESENT:

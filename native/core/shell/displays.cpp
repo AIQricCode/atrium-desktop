@@ -2,6 +2,7 @@
 #include "shell/games.h"
 #include "shell/task_model.h"
 
+#include <dwmapi.h>
 #include <shellapi.h>
 
 #include <algorithm>
@@ -146,22 +147,27 @@ bool FullScreenInFront(HMONITOR monitor)
         if (SUCCEEDED(SHQueryUserNotificationState(&state)) && state == QUNS_RUNNING_D3D_FULL_SCREEN)
             return true;
     }
-    // Maximized fills only the work area (all of it when Windows' taskbar is hidden).
     MONITORINFO mi{sizeof(mi)};
     RECT r{};
-    if (IsZoomed(root) || !GetMonitorInfoW(monitor, &mi) || !GetWindowRect(root, &r))
+    if (!GetMonitorInfoW(monitor, &mi) || !GetWindowRect(root, &r))
         return false;
-    return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top && r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+    RECT ext = r;
+    DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &ext, sizeof(ext));
+    const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(root, GWL_STYLE));
+    return IsFullscreenWindowBounds(r, ext, mi.rcMonitor, mi.rcWork, style, IsZoomed(root) != FALSE);
 }
 
 bool FillsScreen(HWND window)
 {
     MONITORINFO mi{sizeof(mi)};
     RECT r{};
-    if (!IsWindowVisible(window) || IsIconic(window) || IsZoomed(window) || !GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mi) ||
+    if (!IsWindowVisible(window) || IsIconic(window) || !GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mi) ||
         !GetWindowRect(window, &r))
         return false;
-    return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top && r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+    RECT ext = r;
+    DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &ext, sizeof(ext));
+    const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE));
+    return IsFullscreenWindowBounds(r, ext, mi.rcMonitor, mi.rcWork, style, IsZoomed(window) != FALSE);
 }
 
 std::vector<TaskItem> TaskItemsForDisplay(const std::vector<TaskItem>& items, const std::wstring& mode, bool primary, HMONITOR monitor, HWND foreground,

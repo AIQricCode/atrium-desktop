@@ -602,6 +602,8 @@ bool GlassRenderer::Present(const std::vector<GlassParams>& shapes, const std::f
 
 bool GlassRenderer::PresentSpan(std::span<const GlassParams> shapes, const std::function<void(ID2D1DeviceContext2*)>& overlay, bool backdropDirty)
 {
+    lastPresentBusy_ = false;
+    const bool wasPresented = hasPresented_;
     auto* ctx = gpu_.context.get();
     EnsureBackBufferRtv();
     NormalizeShapes(shapes);
@@ -632,8 +634,17 @@ bool GlassRenderer::PresentSpan(std::span<const GlassParams> shapes, const std::
         ctx->CopySubresourceRegion(presented_.get(), 0, 0, 0, 0, roi_.get(), 0, nullptr);
         hasPresented_ = hasBackdrop_;
     }
-    HRESULT hr = swap_->Present(sync_, 0);
+    const UINT presentFlags = sync_ == 0 ? DXGI_PRESENT_DO_NOT_WAIT : 0;
+    HRESULT hr = swap_->Present(sync_, presentFlags);
+    if (presentFlags != 0 && hr == DXGI_ERROR_INVALID_CALL)
+        hr = swap_->Present(sync_, 0);
     if (SUCCEEDED(hr)) {
+        ready_ = false;
+        return true;
+    }
+    if (hr == DXGI_ERROR_WAS_STILL_DRAWING) {
+        hasPresented_ = wasPresented;
+        lastPresentBusy_ = true;
         ready_ = false;
         return true;
     }

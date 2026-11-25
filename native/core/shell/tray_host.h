@@ -67,12 +67,16 @@ struct TrayHostYieldPolicy {
         retryAt = 0;
         rapidLosses = 0;
         const bool wasYielded = Yielded();
-        reason = TrayHostYieldReason::None;
-        return wasYielded;
+        reason = startAllBack ? TrayHostYieldReason::StartAllBack : TrayHostYieldReason::None;
+        return wasYielded && !startAllBack;
     }
 
     bool OnFirst()
     {
+        if (hasStartAllBack) {
+            reason = TrayHostYieldReason::StartAllBack;
+            return false;
+        }
         lossWindowStart = 0;
         retryAt = 0;
         rapidLosses = 0;
@@ -173,13 +177,19 @@ public:
     void Hover(const std::wstring& key, POINT at, RECT cell = {});
     // Where icons are, for apps that ask (Shell_NotifyIconGetRect): around the last
     // click for the icon clicked, `anchor` (the bar's tray entry) for the others.
-    void SetPlaces(RECT anchor);
+    void SetPlaces(RECT anchor)
+    {
+        std::lock_guard g(mutex_);
+        anchor_ = anchor;
+    }
 
 private:
     void Run();
     static LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM w, LPARAM l);
     static void CALLBACK ShellEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG object, LONG, DWORD, DWORD);
     LRESULT Message(HWND h, UINT m, WPARAM w, LPARAM l);
+    void OnTimer(HWND h, WPARAM w);
+    void HandleExplorerFront(HWND w, ULONGLONG now, bool wasYielded);
     LRESULT OnNotifyIcon(WPARAM w, const COPYDATASTRUCT* cds);
     void Record(DWORD message, DWORD cbData, const void* nidPtr, HWND hwnd, const std::wstring& key, std::shared_ptr<const IconImage> image, LRESULT result);
     LRESULT OnIconRect(WPARAM w, const COPYDATASTRUCT* cds);

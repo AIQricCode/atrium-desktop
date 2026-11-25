@@ -421,7 +421,7 @@ PanelGlassHost::StepResult PanelGlassHost::RenderSinglePanel(const GlassPanel& p
                                                              ID3D11Texture2D* source, uint64_t tick, double now, bool& moving, bool& gpuSubmitted)
 {
     const int w = p.window.right - p.window.left, h = p.window.bottom - p.window.top;
-    if (w <= 0 || h <= 0 || !IsWindow(p.hwnd))
+    if (w <= 0 || h <= 0 || !IsWindow(p.hwnd) || !IsWindowVisible(p.hwnd))
         return StepResult::Ok;
     const float panelScale = float(GetDpiForWindow(p.hwnd)) / 96.f;
     PanelState& ps = panels_.try_emplace(p.hwnd, p.hwnd).first->second;
@@ -493,6 +493,10 @@ PanelGlassHost::StepResult PanelGlassHost::RenderSinglePanel(const GlassPanel& p
         r.SetOffset(p.offset);
     if (!r.Present(gp_, nullptr))
         return StepResult::Retry;
+    if (r.LastPresentBusy()) {
+        ps.owed = true;
+        return StepResult::Ok;
+    }
     gpuSubmitted = true;
     RecordPanelPresent(ps, p, w, h, now, t0, created, t1, moved, newDesktop, under, same);
     return StepResult::Ok;

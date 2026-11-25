@@ -308,6 +308,33 @@ LRESULT CALLBACK TrayHost::Proc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
 }
 
+void TrayHost::OnTimer(HWND h, WPARAM w)
+{
+    if (w == kKeepTimer) {
+        KeepFirst();
+        {
+            std::lock_guard g(mutex_);
+            const ULONGLONG now = GetTickCount64();
+            std::vector<std::wstring> flashing;
+            for (const auto& [key, icon] : icons_)
+                if (icon.flash.until > now)
+                    flashing.push_back(key);
+            if (flashing != flashingKeys_)
+                flashingKeys_ = std::move(flashing), dirty_ = true;
+        }
+        if (dirty_.exchange(false))
+            PostMessageW(notify_, msg_, 0, 0), LogList();
+    } else if (w == kPruneTimer) {
+        Prune();
+    } else if (w == kPopupTimer) {
+        KillTimer(h, kPopupTimer), Popup(true);
+    } else if (w == kRecollectTimer) {
+        KillTimer(h, kRecollectTimer);
+        if (!yielded_)
+            Broadcast();
+    }
+}
+
 LRESULT TrayHost::Message(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m) {
@@ -319,31 +346,7 @@ LRESULT TrayHost::Message(HWND h, UINT m, WPARAM w, LPARAM l)
             return OnIconRect(w, cds);
         return Forward(m, w, l); // app bars (0) and the rest: Explorer's
     }
-    case WM_TIMER:
-        if (w == kKeepTimer) {
-            KeepFirst();
-            {
-                std::lock_guard g(mutex_);
-                const ULONGLONG now = GetTickCount64();
-                std::vector<std::wstring> flashing;
-                for (const auto& [key, icon] : icons_)
-                    if (icon.flash.until > now)
-                        flashing.push_back(key);
-                if (flashing != flashingKeys_)
-                    flashingKeys_ = std::move(flashing), dirty_ = true;
-            }
-            if (dirty_.exchange(false))
-                PostMessageW(notify_, msg_, 0, 0), LogList();
-        } else if (w == kPruneTimer) {
-            Prune();
-        } else if (w == kPopupTimer) {
-            KillTimer(h, kPopupTimer), Popup(true);
-        } else if (w == kRecollectTimer) {
-            KillTimer(h, kRecollectTimer);
-            if (!yielded_)
-                Broadcast();
-        }
-        return 0;
+    case WM_TIMER: OnTimer(h, w); return 0;
     case WM_WINDOWPOSCHANGING: reinterpret_cast<WINDOWPOS*>(l)->flags &= ~SWP_SHOWWINDOW; return 0;
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
     case WM_DESTROY: PostQuitMessage(0); return 0;
@@ -373,7 +376,9 @@ LRESULT TrayHost::Message(HWND h, UINT m, WPARAM w, LPARAM l)
         // only: once in front again the host asks for them once more.
         if (GetTickCount64() - broadcastAt_ > 3000) {
             Log(L"tray host: Explorer restarted");
-            KeepFirst(), SetTimer(h, kRecollectTimer, kRecollectMs, nullptr);
+            KeepFirst();
+            if (!yielded_)
+                SetTimer(h, kRecollectTimer, kRecollectMs, nullptr);
         }
         return 0;
     }
@@ -562,42 +567,42 @@ void TrayHost::KeepFirst()
         SetPropW(w, kTaskband, band);
     const DWORD shellPid = ShellPid();
     const bool wasYieldedBefore = yielded_.load();
-    if (shellPid != yieldPolicy_.shellPid && yieldPolicy_.OnShellPid(shellPid, HasStartAllBackModule(shellPid))) {
-        yielded_ = false;
-        dirty_ = true;
-    }
+    if (shellPid != yieldPolicy_.shellPid && yieldPolicy_.OnShellPid(shellPid, HasStartAllBackModule(shellPid)))
+        yielded_ = false, dirty_ = true;
     HWND first = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (first == w) {
+    if (yieldPolicy_.hasStartAllBack) {
+        yielded_ = true;
+        KillTimer(w, kRecollectTimer);
+        if (!wasYieldedBefore)
+            Log(L"tray host: StartAllBack detected in explorer.exe (pid %lu); yielding", shellPid), dirty_ = true;
+        if (first == w || (GetWindowLongPtrW(w, GWL_EXSTYLE) & WS_EX_TOPMOST)) {
+            SetWindowPos(w, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            first = FindWindowW(L"Shell_TrayWnd", nullptr);
+        }
+    } else if (first == w) {
         if (yieldPolicy_.OnFirst()) {
             yielded_ = false, dirty_ = true;
             Log(L"tray host: in front again");
             SetTimer(w, kRecollectTimer, 200, nullptr); // updates went past the host meanwhile
         }
-        FinishKeepFirst(first, shell, shellPid, wasYieldedBefore);
-        return;
-    }
-    const DWORD owner = PidOf(first);
-    if (first && owner != GetCurrentProcessId() && owner != shellPid) {
+    } else if (const DWORD owner = PidOf(first); first && owner != GetCurrentProcessId() && owner != shellPid) {
         if (yieldPolicy_.OnOtherProcess()) {
             yielded_ = true, dirty_ = true;
             Log(L"tray host: another program's tray (pid %lu) is in front: left there", owner);
         }
-        FinishKeepFirst(first, shell, shellPid, wasYieldedBefore);
-        return;
+    } else {
+        HandleExplorerFront(w, GetTickCount64(), yielded_.load());
     }
-    const ULONGLONG now = GetTickCount64();
-    const bool wasYielded = yielded_.load();
+    FinishKeepFirst(first, shell, shellPid, wasYieldedBefore);
+}
+
+void TrayHost::HandleExplorerFront(HWND w, ULONGLONG now, bool wasYielded)
+{
     bool newlyYielded = false;
     if (!yieldPolicy_.OnExplorerFirst(now, newlyYielded)) {
         yielded_ = true;
-        if (newlyYielded) {
-            if (yieldPolicy_.Reason() == TrayHostYieldReason::StartAllBack)
-                Log(L"tray host: StartAllBack detected in explorer.exe (pid %lu); yielding", shellPid);
-            else
-                Log(L"tray host: Explorer's taskbar repeatedly reclaimed first (%d times); backing off 60s", yieldPolicy_.rapidLosses);
-            dirty_ = true;
-        }
-        FinishKeepFirst(first, shell, shellPid, wasYieldedBefore);
+        if (newlyYielded)
+            Log(L"tray host: Explorer's taskbar repeatedly reclaimed first (%d times); backing off 60s", yieldPolicy_.rapidLosses), dirty_ = true;
         return;
     }
     SetWindowPos(w, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
@@ -610,10 +615,9 @@ void TrayHost::KeepFirst()
         if (!nowYielded && again)
             Log(L"tray host: in front again"), SetTimer(w, kRecollectTimer, 200, nullptr);
     }
-    if (now - lostAt_ > 60000) // not on every round
+    if (now - lostAt_ > 60000)
         Log(L"tray host: Explorer's taskbar came first; moved back (%s)", again ? L"first again" : L"still second");
     lostAt_ = now;
-    FinishKeepFirst(first, shell, shellPid, wasYieldedBefore);
 }
 
 const wchar_t* YieldReasonName(TrayHostYieldReason reason)
@@ -716,12 +720,6 @@ std::vector<std::wstring> TrayHost::Flashing() const
         if (icon.flash.until > now && !icon.exe.empty())
             out.push_back(icon.exe);
     return out;
-}
-
-void TrayHost::SetPlaces(RECT anchor)
-{
-    std::lock_guard g(mutex_);
-    anchor_ = anchor;
 }
 
 void TrayHost::Hover(const std::wstring& key, POINT at, RECT cell)

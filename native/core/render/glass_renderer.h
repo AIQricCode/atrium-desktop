@@ -97,6 +97,7 @@ public:
     // Several shapes, back to front (each with its own shadow), then the overlay.
     bool Present(const std::vector<GlassParams>& shapes, const std::function<void(ID2D1DeviceContext2*)>& overlay, bool backdropDirty = true);
     bool LastPresentDrewGlass() const { return lastGlassDrawn_; }
+    bool LastPresentBusy() const { return lastPresentBusy_; }
 
     // D45: the swap chain queues one frame at most, and its latency object is signalled when
     // that frame has been taken for the screen. Ready() takes the signal without waiting (once
@@ -167,6 +168,7 @@ private:
     std::vector<GlassParams> normParams_, cachedGlassParams_;
     bool glassCacheValid_ = false;
     bool lastGlassDrawn_ = false;
+    bool lastPresentBusy_ = false;
     bool hasPresented_ = false;
     // The bar waits for the display between frames; a popup's glass is shown
     // at once, as its content is (Surface presents without waiting), so a
