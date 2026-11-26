@@ -7,6 +7,9 @@
 #include <windows.h>
 
 #include <string>
+#include <vector>
+
+struct IWICImagingFactory;
 
 namespace atrium {
 
@@ -27,6 +30,8 @@ bool HIconToImage(HICON icon, IconImage& out);
 IconImage FitToSquare(const IconImage& src, int size);
 // Crops a premultiplied image to a centred square and scales it to size x size (cover).
 IconImage CropToSquare(const IconImage& src, int size);
+// Pull-decodes encoded image bytes into a centred square targetSize x targetSize premultiplied BGRA IconImage via WIC.
+bool DecodeWicSquareImage(IWICImagingFactory* wic, std::vector<uint8_t>& bytes, int targetSize, IconImage& out);
 inline bool IsLink(const std::wstring& path) { return path.size() > 4 && _wcsicmp(path.c_str() + path.size() - 4, L".lnk") == 0; }
 
 } // namespace atrium

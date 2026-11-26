@@ -387,8 +387,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private async Task LoadFromCoreAsync()
     {
-        await _client.ConnectAsync(800);
         long draftBefore = _session.DraftVersion;
+        await _client.ConnectAsync(800);
         var state = await _client.GetAsync();
         if (_updatesClosed || _session.Closed) return;
         var pending = App.TakePendingState();
@@ -1126,7 +1126,7 @@ public sealed partial class MainWindow : Window, IDisposable
     // Title-bar actions appear while there is something to save, and briefly after a save.
     private void UpdateButtons()
     {
-        bool dirty = _session.HasUnsavedChanges;
+        bool dirty = _session.Initialized && _session.HasUnsavedChanges;
         bool canEdit = dirty && _saveTask == null;
         RevertButton.IsEnabled = canEdit; SaveButton.IsEnabled = canEdit && !_session.HasPinOverflow;
         _flashId++;
@@ -1158,24 +1158,25 @@ public sealed partial class MainWindow : Window, IDisposable
     // so dragging a slider never queues up stale frames.
     private async void SchedulePreview()
     {
-        if (!_client.Connected || _updatesClosed || _session.HasPinOverflow) return;
+        if (!_session.Initialized || !_client.Connected || _updatesClosed || _session.HasPinOverflow) return;
         if (_previewBusy) { _previewPending = true; return; }
         _previewBusy = true;
         do
         {
             _previewPending = false;
-            if (_session.HasPinOverflow) break;
+            if (!_session.Initialized || _session.HasPinOverflow) break;
             await _client.PreviewAsync(CurrentSettings.Clone());
             await Task.Delay(16);
-        } while (_previewPending && !_updatesClosed && !_session.HasPinOverflow);
+        } while (_previewPending && _session.Initialized && !_updatesClosed && !_session.HasPinOverflow);
         _previewBusy = false;
         if (!_updatesClosed && !_client.Connected) ShowStatus(false);
     }
 
-    private async void OnSave(object sender, RoutedEventArgs e) { if (_saveTask == null) await SaveAsync(); }
+    private async void OnSave(object sender, RoutedEventArgs e) { if (_session.Initialized && _saveTask == null) await SaveAsync(); }
 
     private async Task<bool> SaveAsync()
     {
+        if (!_session.Initialized) return false;
         if (_saveTask != null)
         {
             if (!await _saveTask) return false;
@@ -1190,8 +1191,8 @@ public sealed partial class MainWindow : Window, IDisposable
             if (ReferenceEquals(_saveTask, task)) _saveTask = null;
             if (!_updatesClosed && !_session.Closed)
             {
-                RevertButton.IsEnabled = _session.HasUnsavedChanges;
-                SaveButton.IsEnabled = _session.HasUnsavedChanges && !_session.HasPinOverflow;
+                RevertButton.IsEnabled = _session.Initialized && _session.HasUnsavedChanges;
+                SaveButton.IsEnabled = _session.Initialized && _session.HasUnsavedChanges && !_session.HasPinOverflow;
             }
         }
     }
@@ -1240,10 +1241,9 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private async void OnRevert(object sender, RoutedEventArgs e)
     {
-        _session.Revert();
-        Status.IsOpen = false;
-        LoadIntoControls();
-        UpdateButtons();
+        if (!_session.Initialized) return;
+        _session.Revert(); Status.IsOpen = false;
+        LoadIntoControls(); UpdateButtons();
         await _client.CancelAsync();
     }
 

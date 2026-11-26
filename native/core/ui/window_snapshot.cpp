@@ -21,10 +21,16 @@ namespace {
 // Coverage of a rounded rectangle (0..w, 0..h, corners r) at the centre of pixel (x, y).
 float RoundedCoverage(int x, int y, int w, int h, float r)
 {
-    float px = float(x) + 0.5f, py = float(y) + 0.5f;
-    float cx = std::clamp(px, r, float(w) - r), cy = std::clamp(py, r, float(h) - r);
-    float d = std::hypot(px - cx, py - cy);
-    return std::clamp(r + 0.5f - d, 0.f, 1.f);
+    if (x < 0 || x >= w || y < 0 || y >= h)
+        return 0.f;
+    r = std::clamp(r, 0.f, 0.5f * float(std::min(w, h)));
+    if (r <= 0.5f)
+        return 1.f;
+    const float px = float(x) + 0.5f, py = float(y) + 0.5f;
+    if ((px >= r && px <= float(w) - r) || (py >= r && py <= float(h) - r))
+        return 1.f;
+    const float cx = px < r ? r : float(w) - r, cy = py < r ? r : float(h) - r;
+    return std::clamp(r + 0.5f - std::hypot(px - cx, py - cy), 0.f, 1.f);
 }
 
 // All-zero buffers and near-uniform frames (not yet drawn) are blank; 32+ differing pixels indicate content.
@@ -77,8 +83,15 @@ WindowPicture BuildWindowPictureFromBgra(const uint8_t* src, int sw, int sh, int
     const int outW = tw + 2 * kPicturePad, outH = th + 2 * kPicturePad;
     std::vector<uint8_t> bgra(size_t(outW) * outH * 4, 0);
     auto writePixel = [&](int x, int y, uint8_t b, uint8_t g, uint8_t r) {
-        const float a = RoundedCoverage(x, y, tw, th, radius);
         uint8_t* d = &bgra[(size_t(y + kPicturePad) * outW + x + kPicturePad) * 4];
+        const float a = radius <= 0.5f ? 1.f : RoundedCoverage(x, y, tw, th, radius);
+        if (a >= 1.f) {
+            d[0] = b;
+            d[1] = g;
+            d[2] = r;
+            d[3] = 255;
+            return;
+        }
         d[0] = uint8_t(std::lround(b * a));
         d[1] = uint8_t(std::lround(g * a));
         d[2] = uint8_t(std::lround(r * a));
@@ -187,8 +200,15 @@ WindowPicture BuildPictures(HWND window, const uint8_t* src, int pw, int ph, int
 }
 
 WindowPicture TryPrintWindow(HWND window, const RECT& win, const RECT& frame, int maxWidth, int maxHeight, float radius, int largeMax, WindowPicture* large,
-                             bool& printed, DWORD& pwErr)
+                             HANDLE stopEvent, bool& printed, DWORD& pwErr)
 {
+    if ((stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) || !CanPrintWindow(window))
+        return {};
+    DWORD_PTR ping = 0;
+    if (!SendMessageTimeoutW(window, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 150, &ping)) {
+        pwErr = GetLastError();
+        return {};
+    }
     const int ww = win.right - win.left, wh = win.bottom - win.top;
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -253,7 +273,7 @@ WindowPicture Capture(HWND window, int maxWidth, int maxHeight, float radius, in
     const int ww = win.right - win.left, wh = win.bottom - win.top;
     bool printed = false;
     DWORD pwErr = 0;
-    WindowPicture result = TryPrintWindow(window, win, frame, maxWidth, maxHeight, radius, largeMax, large, printed, pwErr);
+    WindowPicture result = TryPrintWindow(window, win, frame, maxWidth, maxHeight, radius, largeMax, large, stopEvent, printed, pwErr);
     if (result.ok)
         return result;
     if (!CanPrintWindow(window)) {
@@ -321,23 +341,37 @@ WindowSnapshots::WindowSnapshots(HWND notify, UINT message)
     : notify_(notify),
       message_(message),
       stopEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+      doneEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
       worker_([this] { Worker(); })
 {
 }
 
 WindowSnapshots::~WindowSnapshots()
 {
-    std::unique_lock lk(lock_);
-    stop_ = true;
-    lk.unlock();
-    if (stopEvent_)
-        SetEvent(stopEvent_);
-    cv_.notify_all();
+    SignalStop();
     if (worker_.joinable())
         worker_.join();
     if (stopEvent_)
         CloseHandle(stopEvent_);
+    if (doneEvent_)
+        CloseHandle(doneEvent_);
 }
+
+void WindowSnapshots::SignalStop()
+{
+    {
+        std::lock_guard lk(lock_);
+        stop_ = true;
+        queue_.clear();
+        shrinkQueue_.clear();
+        pending_.clear();
+    }
+    if (stopEvent_)
+        SetEvent(stopEvent_);
+    cv_.notify_all();
+}
+
+bool WindowSnapshots::WaitStop(DWORD timeoutMs) const { return !doneEvent_ || WaitForSingleObject(doneEvent_, timeoutMs) == WAIT_OBJECT_0; }
 
 void WindowSnapshots::Request(HWND window, int maxWidth, int maxHeight, float radius, int largeMax, bool urgent)
 {
@@ -399,6 +433,17 @@ void WindowSnapshots::RequestShrink(HWND window, unsigned gen, std::shared_ptr<c
 
 void WindowSnapshots::Worker()
 {
+    struct DoneSignal {
+        HANDLE event = nullptr;
+        explicit DoneSignal(HANDLE e) : event(e) {}
+        DoneSignal(const DoneSignal&) = delete;
+        DoneSignal& operator=(const DoneSignal&) = delete;
+        ~DoneSignal()
+        {
+            if (event)
+                SetEvent(event);
+        }
+    } doneSignal(doneEvent_);
     // Physical px of every monitor, as the window's own picture is.
     SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     const HRESULT roHr = RoInitialize(RO_INIT_MULTITHREADED);

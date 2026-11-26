@@ -13,6 +13,7 @@ internal sealed class SettingsSession
     public string? InstanceId { get; private set; }
     public ulong Revision { get; private set; }
     public long DraftVersion { get; private set; }
+    public bool Initialized { get; private set; }
     public bool Closed { get; private set; }
 
     public bool HasUnsavedChanges => !Draft.SameAs(Saved);
@@ -64,6 +65,7 @@ internal sealed class SettingsSession
         BarSettings? pendingCurrent = null)
     {
         if (Closed) return false;
+        Initialized = true;
         Saved = saved.Clone();
         InstanceId = instanceId;
         Revision = revision;
@@ -87,6 +89,7 @@ internal sealed class SettingsSession
         long draftVersionBeforeAwait)
     {
         if (Closed) return false;
+        Initialized = true;
         InstanceId = instanceId;
         Revision = revision;
         bool keepDraft = DraftVersion != draftVersionBeforeAwait || !Draft.SameAs(Saved);

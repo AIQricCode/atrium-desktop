@@ -73,6 +73,9 @@ private:
     };
     static constexpr UINT_PTR kStatusTimer = 1, kRadioRefreshTimer = 2, kWifiAgainTimer = 3;
     static constexpr UINT WM_CC_MODULES = WM_APP + 0x5A; // the system's switches were read (moduleSlot_)
+    static constexpr float kSliderH = 68, kHeader = 58, kFooter = 46, kSection = 30, kAppRowH = 50, kModeH = 78;
+    static constexpr int kMaxRows = 6, kMaxOutputs = 4, kMaxApps = 5, kMaxDisplays = 4;
+    static constexpr double kPageMs = 320;
     struct Worker {
         void Post(std::wstring key, std::function<void()> task)
         {
@@ -118,12 +121,21 @@ private:
     };
 
     void Paint(Canvas& c);
+    std::vector<ShapeDip> BuildMorphShapes(D2D1_RECT_F card, float e) const;
     void PaintMain(Canvas& c, const Theme& t);
+    void PaintMainConnections(Canvas& c, const Theme& t, D2D1_RECT_F conn, float modR);
+    void PaintMainBattery(Canvas& c, const Theme& t, D2D1_RECT_F batt, float modR);
+    void PaintMainCast(Canvas& c, const Theme& t, D2D1_RECT_F cast, float modR);
     void PaintWifi(Canvas& c, const Theme& t, D2D1_RECT_F card);
+    void PaintWifiRow(Canvas& c, const Theme& t, const WifiNetwork& n, int idx, float w, float y);
     void PaintWifiEmpty(Canvas& c, const Theme& t, float w, float& y);
     void PaintBluetooth(Canvas& c, const Theme& t, D2D1_RECT_F card);
     void PaintSound(Canvas& c, const Theme& t, D2D1_RECT_F card);
+    void PaintSoundOutputRow(Canvas& c, const Theme& t, const AudioOutput& o, int idx, float w, float y);
+    void PaintSoundAppRow(Canvas& c, const Theme& t, const AudioApp& a, int idx, float w, float y);
     void PaintCast(Canvas& c, const Theme& t, D2D1_RECT_F card);
+    void PaintCastDisplayRow(Canvas& c, const Theme& t, const WirelessDisplay& d, int idx, float w, float y);
+    void PaintCastModes(Canvas& c, const Theme& t, float w, float y);
     void Link(Canvas& c, const Theme& t, const std::wstring& id, const std::wstring& label, float left, float right, float y, int align);
     void PaintSlider(Canvas& c, const Theme& t, D2D1_RECT_F card, const std::wstring& id, const std::wstring& title, const std::wstring& glyph, int value,
                      bool dim, const std::wstring& right, D2D1_RECT_F& track, bool enabled = true);

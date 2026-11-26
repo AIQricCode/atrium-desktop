@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'package-ownership.fixtures.ps1')
 $project = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $sourceUninstall = Join-Path $project 'tools\Uninstall.ps1'
@@ -185,6 +185,22 @@ static class UninstallStub
         string dir = Path.GetDirectoryName(self);
         string exe = Path.GetFileName(self);
         if (Array.IndexOf(args, "--noop") >= 0) return 0;
+        string lockTarget = "", lockReady = "";
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--lock" && i + 1 < args.Length) lockTarget = args[++i];
+            else if (args[i] == "--lock-ready" && i + 1 < args.Length) lockReady = args[++i];
+        }
+        if (lockTarget.Length > 0)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(lockTarget));
+            using (new FileStream(lockTarget, FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read))
+            {
+                if (lockReady.Length > 0) File.WriteAllText(lockReady, "1");
+                Thread.Sleep(60000);
+            }
+            return 0;
+        }
         var m = ReadMode(dir);
         string tag = Get(m, "tag");
         string hostCls = Get(m, "host_class");
@@ -424,7 +440,48 @@ static class UninstallStub
         Stop-CaseProcesses $cDir $tracked
     }
     Write-Host 'Uninstall Case 5 passed (uninstaller holding mutex rejected updater without spawning Settings).'
-    Write-Host 'Uninstaller regressions passed (5 cases).'
+
+    # Case 6: Interrupted uninstall leaves manifest + Uninstall.ps1 for successful retry after releasing file lock
+    $cDir = Join-Path $fixtureRoot 'case6-interrupted-retry'; $inst = Join-Path $cDir 'Atrium'
+    $log = Join-Path $cDir 'events.log'; $tracked = New-Object System.Collections.ArrayList
+    $lockReady = Join-Path $cDir 'lock.ready'; $lockHelper = Join-Path $cDir 'locker.exe'
+    try {
+        Populate-Install $inst @{ tag = 'c6'; host_class = $testHostClass; events_log = $log }
+        Write-TestManifest $inst '2.8.0'
+        $lockedDll = Join-Path $inst 'Settings\Atrium.Settings.dll'
+        $bMod = Write-Utf8Bytes (Join-Path $inst $modSample.Path) $modSample.Modified
+        $kept = @{}
+        foreach ($rel in $userSamples.Keys) { $kept[$rel] = Write-Utf8Bytes (Join-Path $inst $rel) $userSamples[$rel] }
+        Copy-Item -LiteralPath $stubExe -Destination $lockHelper -Force
+        $lockArgs = @('--lock', "`"$lockedDll`"", '--lock-ready', "`"$lockReady`"")
+        $lockProc = Start-Process -FilePath $lockHelper -ArgumentList $lockArgs -WindowStyle Hidden -PassThru
+        [void]$tracked.Add($lockProc)
+        $until = [DateTime]::UtcNow.AddSeconds(5)
+        while (!(Test-Path -LiteralPath $lockReady) -and [DateTime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 30 }
+        if (!(Test-Path -LiteralPath $lockReady)) { throw 'Case 6: lock helper did not become ready in time' }
+
+        $first = Invoke-Uninstaller $inst
+        if ($first.ExitCode -eq 0) { throw 'Case 6: expected first uninstall attempt to fail while DLL was locked' }
+        if (Test-Path -LiteralPath (Join-Path $inst 'Atrium.exe')) { throw 'Case 6: expected Atrium.exe to be deleted before locked DLL' }
+        foreach ($retained in @('Uninstall.ps1', 'package-manifest.json', 'Settings\Atrium.Settings.dll')) {
+            if (!(Test-Path -LiteralPath (Join-Path $inst $retained) -PathType Leaf)) {
+                throw "Case 6: expected $retained to remain after partial uninstall"
+            }
+        }
+        Assert-SameBytes (Join-Path $inst $modSample.Path) $bMod 'Case 6 (after first attempt)'
+        foreach ($rel in $userSamples.Keys) { Assert-SameBytes (Join-Path $inst $rel) $kept[$rel] 'Case 6 (after first attempt)' }
+
+        Stop-Process -Id $lockProc.Id -Force -ErrorAction SilentlyContinue; [void]$lockProc.WaitForExit(3000)
+        $retry = Invoke-Uninstaller $inst
+        if ($retry.ExitCode -ne 0) { throw "Case 6 retry failed (exit $($retry.ExitCode)): $($retry.Error)" }
+        foreach ($gone in @('Atrium.exe', 'Settings\Atrium.Settings.exe', 'Settings\Atrium.Settings.dll', 'Uninstall.ps1', 'package-manifest.json')) {
+            if (Test-Path -LiteralPath (Join-Path $inst $gone)) { throw "Case 6: official file remained after retry: $gone" }
+        }
+        Assert-SameBytes (Join-Path $inst $modSample.Path) $bMod 'Case 6 (after retry)'
+        foreach ($rel in $userSamples.Keys) { Assert-SameBytes (Join-Path $inst $rel) $kept[$rel] 'Case 6 (after retry)' }
+    } finally { Stop-CaseProcesses $cDir $tracked }
+    Write-Host 'Uninstall Case 6 passed (interrupted uninstall retained manifest + script and succeeded on retry).'
+    Write-Host 'Uninstaller regressions passed (6 cases).'
 } finally {
     Stop-CaseProcesses $fixtureRoot
     if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue }

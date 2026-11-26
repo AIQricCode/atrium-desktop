@@ -501,14 +501,14 @@ try {
                 }
             }
         } catch { $rollbackErrors.Add($_.Exception.Message) }
-        $restored = $true
         $remainingBackupFiles = if (Test-Path -LiteralPath $backup) {
             @(Get-ChildItem -LiteralPath $backup -Recurse -File -Force -ErrorAction SilentlyContinue)
         } else { @() }
-        if ($rollbackErrors.Count -gt 0 -or $remainingBackupFiles.Count -gt 0) {
+        $restored = ($rollbackErrors.Count -eq 0 -and $remainingBackupFiles.Count -eq 0)
+        if (!$restored) {
             $detail = (($rollbackErrors | Select-Object -Unique) -join ' ')
             if ($detail) { $failure += " 恢复旧包未完成：$detail" }
-            $failure += "；恢复副本保留在 $backup。"
+            $failure += "；恢复副本保留在 $backup，已跳过自动重启。"
         }
     }
     Write-Result $failure

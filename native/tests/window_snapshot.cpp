@@ -208,6 +208,72 @@ bool TestAsyncRequestShrink()
     return ok;
 }
 
+bool CheckPixelRgba(const IconImage& img, int x, int y, uint8_t eb, uint8_t eg, uint8_t er, uint8_t ea, const char* label)
+{
+    const uint8_t* p = img.Data() + (size_t(y) * img.width + size_t(x)) * 4;
+    if (p[0] != eb || p[1] != eg || p[2] != er || p[3] != ea) {
+        std::fprintf(stderr, "FAIL: %s at (%d,%d): got (%u,%u,%u,%u), expected (%u,%u,%u,%u)\n", label, x, y, p[0], p[1], p[2], p[3], eb, eg, er, ea);
+        return false;
+    }
+    return true;
+}
+
+bool TestSquareCorners()
+{
+    for (int srcSize : {16, 32}) {
+        const int w = 16, h = 12, sw = srcSize, sh = (srcSize == 16) ? 12 : 24, stride = sw * 4;
+        std::vector<uint8_t> white(size_t(sh) * stride, 255);
+        WindowPicture pic = BuildWindowPictureFromBgra(white.data(), sw, sh, stride, w, h, 0.f, false);
+        if (!Check(pic.ok && pic.width == w && pic.height == h, "square corner BuildWindowPictureFromBgra failed"))
+            return false;
+        for (int y = 0; y < pic.image.height; ++y)
+            for (int x = 0; x < pic.image.width; ++x) {
+                const bool inside = x >= kPicturePad && x < kPicturePad + w && y >= kPicturePad && y < kPicturePad + h;
+                if (!CheckPixelRgba(pic.image, x, y, inside ? 255 : 0, inside ? 255 : 0, inside ? 255 : 0, inside ? 255 : 0, "square r=0"))
+                    return false;
+            }
+        if (srcSize == 16) {
+            pic.corner = 0.f;
+            const WindowPicture shrunk = Smaller(pic, 8);
+            if (!Check(shrunk.ok && shrunk.width == 8 && shrunk.height == 6 && shrunk.corner == 0.f, "square Smaller() metadata mismatch") ||
+                !CheckPixelRgba(shrunk.image, kPicturePad + 4, kPicturePad + 3, 255, 255, 255, 255, "square Smaller() center") ||
+                !CheckPixelRgba(shrunk.image, kPicturePad, kPicturePad, 255, 255, 255, 255, "square Smaller() corner") ||
+                !CheckPixelRgba(shrunk.image, 0, 0, 0, 0, 0, 0, "square Smaller() pad"))
+                return false;
+        }
+    }
+    return true;
+}
+
+bool TestCornerBoundsAndStop()
+{
+    std::vector<uint8_t> white(size_t(12) * 16 * 4, 255);
+    const WindowPicture subHalf = BuildWindowPictureFromBgra(white.data(), 16, 12, 16 * 4, 16, 12, 0.25f, false);
+    if (!Check(subHalf.ok, "radius=0.25f build failed") ||
+        !CheckPixelRgba(subHalf.image, kPicturePad, kPicturePad, 255, 255, 255, 255, "radius=0.25f corner") ||
+        !CheckPixelRgba(subHalf.image, kPicturePad + 8, kPicturePad + 6, 255, 255, 255, 255, "radius=0.25f center"))
+        return false;
+
+    const WindowPicture hugeRadius = BuildWindowPictureFromBgra(white.data(), 16, 12, 16 * 4, 16, 12, 999.f, false);
+    if (!Check(hugeRadius.ok, "oversized radius build failed") ||
+        !CheckPixelRgba(hugeRadius.image, kPicturePad + 8, kPicturePad + 6, 255, 255, 255, 255, "oversized radius center") ||
+        !CheckPixelRgba(hugeRadius.image, kPicturePad, kPicturePad, 0, 0, 0, 0, "oversized radius outer corner"))
+        return false;
+
+    HWND notify = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!Check(notify != nullptr, "CreateWindowExW for SignalStop failed"))
+        return false;
+    bool stopped = false;
+    {
+        atrium::WindowSnapshots snapshots(notify, WM_APP + 78);
+        snapshots.Request(notify, 64, 48, 0.f, 0, false);
+        snapshots.SignalStop();
+        stopped = snapshots.WaitStop(1000);
+    }
+    DestroyWindow(notify);
+    return Check(stopped, "SignalStop + WaitStop timed out");
+}
+
 } // namespace
 
 int main()
@@ -281,6 +347,10 @@ int main()
 
     // 6. Async RequestShrink() worker queue & capture queue isolation.
     if (!TestAsyncRequestShrink())
+        return 1;
+
+    // 7. Square corners (r=0 / r=0.25f / oversized r) and SignalStop + WaitStop.
+    if (!TestSquareCorners() || !TestCornerBoundsAndStop())
         return 1;
 
     return 0;

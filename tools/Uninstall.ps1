@@ -171,13 +171,15 @@ try {
     $installRoot = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\')
     $coreExe = Join-Path $installRoot 'Atrium.exe'
     $settingsExe = Join-Path $installRoot 'Settings\Atrium.Settings.exe'
+    $manifestPath = Join-Path $installRoot 'package-manifest.json'
     if (!$installRoot -or $installRoot -eq [IO.Path]::GetPathRoot($installRoot).TrimEnd('\')) {
         throw '请从 Atrium 安装目录运行卸载程序。'
     }
+    $hasBothExes = (Test-Path -LiteralPath $coreExe -PathType Leaf) -and (Test-Path -LiteralPath $settingsExe -PathType Leaf)
+    $hasManifest = Test-Path -LiteralPath $manifestPath -PathType Leaf
 
     if (!$Confirmed) {
-        if (!(Test-Path -LiteralPath $coreExe -PathType Leaf) -or
-            !(Test-Path -LiteralPath $settingsExe -PathType Leaf)) {
+        if (!$hasBothExes -and !$hasManifest) {
             throw '请从 Atrium 安装目录运行卸载程序。'
         }
         $answer = [Windows.Forms.MessageBox]::Show(
@@ -195,22 +197,27 @@ try {
     }
     if (!$installMutexAcquired) { throw '当前安装目录正在执行更新或卸载，请等待其完成后重试。' }
 
-    if (!(Test-Path -LiteralPath $coreExe -PathType Leaf) -or
-        !(Test-Path -LiteralPath $settingsExe -PathType Leaf)) {
+    $hasBothExes = (Test-Path -LiteralPath $coreExe -PathType Leaf) -and (Test-Path -LiteralPath $settingsExe -PathType Leaf)
+    $hasManifest = Test-Path -LiteralPath $manifestPath -PathType Leaf
+    if (!$hasBothExes -and !$hasManifest) {
         throw '请从 Atrium 安装目录运行卸载程序。'
     }
 
     # Resolve and verify ownership by path + SHA-256 before stopping running apps or deleting files.
     $filesToDelete = New-Object 'System.Collections.Generic.List[string]'
     $seenFiles = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    $manifestPath = Join-Path $installRoot 'package-manifest.json'
-    $hasManifest = Test-Path -LiteralPath $manifestPath -PathType Leaf
     if ($hasManifest) {
         $ownedHashes = Read-PackageManifest $installRoot '当前安装目录'
+        if (!$hasBothExes -and (!$ownedHashes.ContainsKey('Atrium.exe') -or !$ownedHashes.ContainsKey('Settings\Atrium.Settings.exe'))) {
+            throw '请从 Atrium 安装目录运行卸载程序。'
+        }
     } else {
         $catalogCandidates = @((Join-Path $installRoot 'Settings\legacy-manifests.json'), (Join-Path $PSScriptRoot 'legacy-manifests.json'))
         $ownedHashes = Resolve-LegacyHashCatalog $LegacyManifestPath $catalogCandidates $installRoot
     }
+    $regularFiles = New-Object 'System.Collections.Generic.List[string]'
+    $deferredOwned = New-Object 'System.Collections.Generic.List[string]'
+    $selfUninstall = $null
     $verifiedOwnedCount = 0
     foreach ($file in @(Get-ChildItem -LiteralPath $installRoot -Recurse -File -Force)) {
         $rel = $file.FullName.Substring($installRoot.Length + 1).Replace('/', '\')
@@ -218,7 +225,13 @@ try {
         $ownership = Get-PackageFileOwnership $rel $file.FullName $ownedHashes
         if ($ownership -eq 'Owned') {
             $verifiedOwnedCount++
-            if ($seenFiles.Add($file.FullName)) { $filesToDelete.Add($file.FullName) }
+            if ($rel -ieq 'Uninstall.ps1') {
+                $selfUninstall = $file.FullName
+            } elseif ($rel -ieq 'Settings\legacy-manifests.json' -or $rel -ieq 'legacy-manifests.json') {
+                if ($seenFiles.Add($file.FullName)) { $deferredOwned.Add($file.FullName) }
+            } else {
+                if ($seenFiles.Add($file.FullName)) { $regularFiles.Add($file.FullName) }
+            }
         }
     }
     if ($verifiedOwnedCount -eq 0) {
@@ -229,8 +242,10 @@ try {
         }
         throw $reason
     }
+    foreach ($full in @($regularFiles | Sort-Object)) { $filesToDelete.Add($full) }
+    foreach ($full in @($deferredOwned | Sort-Object)) { $filesToDelete.Add($full) }
     if ($hasManifest) {
-        foreach ($extra in @('package-manifest.json', 'development.txt')) {
+        foreach ($extra in @('development.txt', 'package-manifest.json')) {
             $norm = Normalize-ManifestRelPath $extra $installRoot
             $full = Join-Path $installRoot $norm
             if ((Test-Path -LiteralPath $full -PathType Leaf) -and $seenFiles.Add($full)) {
@@ -238,6 +253,7 @@ try {
             }
         }
     }
+    if ($selfUninstall -and $seenFiles.Add($selfUninstall)) { $filesToDelete.Add($selfUninstall) }
 
     $settings = @(Get-Process -Name 'Atrium.Settings' -ErrorAction SilentlyContinue | Where-Object {
         try { $_.Path -and [string]::Equals($_.Path, $settingsExe, [StringComparison]::OrdinalIgnoreCase) } catch { $false }
@@ -256,10 +272,12 @@ try {
             }
         } finally { $process.Dispose() }
     }
-    $quit = Start-Process -FilePath $coreExe -ArgumentList '--exit' -WindowStyle Hidden -PassThru
-    try {
-        if (!$quit.WaitForExit(15000) -or $quit.ExitCode -ne 0) { throw 'Atrium 未能退出，请关闭后重试。' }
-    } finally { $quit.Dispose() }
+    if (Test-Path -LiteralPath $coreExe -PathType Leaf) {
+        $quit = Start-Process -FilePath $coreExe -ArgumentList '--exit' -WindowStyle Hidden -PassThru
+        try {
+            if (!$quit.WaitForExit(15000) -or $quit.ExitCode -ne 0) { throw 'Atrium 未能退出，请关闭后重试。' }
+        } finally { $quit.Dispose() }
+    }
 
     $shell = New-Object -ComObject WScript.Shell
     $programs = [Environment]::GetFolderPath('Programs')

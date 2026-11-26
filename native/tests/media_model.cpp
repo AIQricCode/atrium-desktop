@@ -4,6 +4,8 @@
 #include "shell/shell_icon.h"
 
 #include <roapi.h>
+#include <wincodec.h>
+#include <winrt/base.h>
 
 #include <iostream>
 #include <limits>
@@ -260,6 +262,88 @@ void CheckCropToSquare()
     }
 }
 
+std::vector<uint8_t> EncodeTestPng(IWICImagingFactory* wic, UINT w, UINT h, const std::vector<uint8_t>& bgra)
+{
+    winrt::com_ptr<IStream> memStream;
+    winrt::com_ptr<IWICBitmap> bitmap;
+    winrt::com_ptr<IWICBitmapEncoder> encoder;
+    winrt::com_ptr<IWICBitmapFrameEncode> frame;
+    if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, memStream.put())) ||
+        FAILED(wic->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppPBGRA, w * 4, static_cast<UINT>(bgra.size()), const_cast<BYTE*>(bgra.data()),
+                                           bitmap.put())) ||
+        FAILED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, encoder.put())) || FAILED(encoder->Initialize(memStream.get(), WICBitmapEncoderNoCache)) ||
+        FAILED(encoder->CreateNewFrame(frame.put(), nullptr)) || FAILED(frame->Initialize(nullptr)) || FAILED(frame->SetSize(w, h)))
+        return {};
+    WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppPBGRA;
+    if (FAILED(frame->SetPixelFormat(&fmt)) || FAILED(frame->WriteSource(bitmap.get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit()))
+        return {};
+    STATSTG st{};
+    LARGE_INTEGER zero{};
+    if (FAILED(memStream->Stat(&st, STATFLAG_NONAME)) || FAILED(memStream->Seek(zero, STREAM_SEEK_SET, nullptr)))
+        return {};
+    std::vector<uint8_t> bytes(static_cast<size_t>(st.cbSize.QuadPart));
+    ULONG read = 0;
+    return SUCCEEDED(memStream->Read(bytes.data(), static_cast<ULONG>(bytes.size()), &read)) && read == bytes.size() ? bytes : std::vector<uint8_t>{};
+}
+
+std::vector<uint8_t> MakeFramedArtworkBgra(UINT w, UINT h, UINT borderPx)
+{
+    const UINT side = std::min(w, h), x0 = (w - side) / 2, y0 = (h - side) / 2;
+    std::vector<uint8_t> px(size_t(w) * size_t(h) * 4, 0);
+    for (UINT y = 0; y < h; ++y)
+        for (UINT x = 0; x < w; ++x) {
+            uint8_t* p = &px[(size_t(y) * w + x) * 4];
+            if (x < x0 || x >= x0 + side || y < y0 || y >= y0 + side) {
+                p[2] = 240, p[3] = 255; // red outside centre square (must be clipped away)
+            } else if (x >= x0 + borderPx && x < x0 + side - borderPx && y >= y0 + borderPx && y < y0 + side - borderPx) {
+                p[1] = 200, p[3] = 255; // opaque green centre
+            }
+        }
+    return px;
+}
+
+void CheckDecodeWicSquareImage()
+{
+    const HRESULT roHr = RoInitialize(RO_INIT_MULTITHREADED);
+    Require(SUCCEEDED(roHr) || roHr == RPC_E_CHANGED_MODE, "RoInitialize succeeds for DecodeWicSquareImage");
+    winrt::com_ptr<IWICImagingFactory> wic;
+    Require(SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(wic.put()))) && wic, "Create WIC factory");
+
+    for (const auto& [w, h] : {std::pair{640u, 320u}, std::pair{320u, 640u}, std::pair{32u, 16u}, std::pair{128u, 128u}}) {
+        const UINT border = std::min(w, h) / 4;
+        auto png = EncodeTestPng(wic.get(), w, h, MakeFramedArtworkBgra(w, h, border));
+        IconImage out;
+        Require(!png.empty() && DecodeWicSquareImage(wic.get(), png, 128, out), "DecodeWicSquareImage succeeds");
+        Require(out.width == 128 && out.height == 128, "DecodeWicSquareImage outputs 128x128");
+        const uint8_t* mid = out.Data() + (size_t(64) * 128 + 64) * 4;
+        const uint8_t* edge = out.Data();
+        Require(mid[1] >= 195 && mid[2] <= 5 && mid[3] == 255, "DecodeWicSquareImage keeps opaque green centre");
+        Require(edge[0] == 0 && edge[1] == 0 && edge[2] == 0 && edge[3] == 0, "DecodeWicSquareImage keeps transparent outer edge");
+        bool premulOk = true, redAbsent = true;
+        for (size_t i = 0; i < out.Bytes().size(); i += 4) {
+            premulOk &= out.Data()[i] <= out.Data()[i + 3] && out.Data()[i + 1] <= out.Data()[i + 3] && out.Data()[i + 2] <= out.Data()[i + 3];
+            redAbsent &= out.Data()[i + 2] < 16;
+        }
+        Require(premulOk && redAbsent, "DecodeWicSquareImage preserves premultiplied alpha and crops red borders");
+    }
+
+    auto largePng = EncodeTestPng(wic.get(), 4096, 2048, MakeFramedArtworkBgra(4096, 2048, 0));
+    IconImage largeOut;
+    Require(!largePng.empty() && DecodeWicSquareImage(wic.get(), largePng, 128, largeOut) && largeOut.width == 128 && largeOut.height == 128,
+            "DecodeWicSquareImage decodes 4096x2048 cover cleanly");
+    const uint8_t* largeMid = largeOut.Data() + (size_t(64) * 128 + 64) * 4;
+    Require(largeMid[1] >= 195 && largeMid[2] == 0 && largeMid[3] == 255, "DecodeWicSquareImage 4096x2048 centre matches crop");
+
+    std::vector<uint8_t> empty, junk{1, 2, 3, 4};
+    IconImage badOut;
+    Require(!DecodeWicSquareImage(wic.get(), empty, 128, badOut) && !DecodeWicSquareImage(wic.get(), junk, 128, badOut),
+            "DecodeWicSquareImage rejects empty and corrupt buffers");
+
+    wic = nullptr;
+    if (SUCCEEDED(roHr))
+        RoUninitialize();
+}
+
 } // namespace
 
 int main()
@@ -272,6 +356,7 @@ int main()
     CheckNeteaseQueueCache();
     CheckSparseGsmtcTimeline();
     CheckCropToSquare();
+    CheckDecodeWicSquareImage();
     if (g_failures > 0)
         return 1;
     std::cout << "media model: all checks passed\n";

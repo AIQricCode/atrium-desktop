@@ -95,6 +95,7 @@ add_library(atrium_core_lib STATIC
     ui/tray_panel.cpp
     ui/calendar_panel.cpp
     ui/control_center.cpp
+    ui/control_center_paint.cpp
     ui/control_modules.cpp
     ui/desktop_widgets.cpp
     ui/widget_stacking.cpp

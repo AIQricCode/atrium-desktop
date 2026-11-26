@@ -304,6 +304,11 @@ PanelGlassHost::StepResult PanelGlassHost::AcquirePanelCaptures(const std::vecto
                 gpu_.context->CopyResource(extra.texture.get(), frame);
                 extra.copyBounds = extra.bounds;
                 extra.partialCopy = false;
+            } else if (!extra.source->CanReplay()) {
+                // Live screen sources (DXGI/WGC) cannot replay off-region pixels once idle, so keep the full monitor fresh.
+                gpu_.context->CopyResource(extra.texture.get(), frame);
+                extra.copyBounds = extra.bounds;
+                extra.partialCopy = false;
             } else if (CopySecondaryRegion(gpu_, frame, extra.texture.get(), extra.bounds, target)) {
                 extra.copyBounds = target;
                 extra.partialCopy = !EqualRect(&target, &extra.bounds);

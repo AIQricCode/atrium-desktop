@@ -1347,6 +1347,27 @@ finally
                 "ControlModules 3-way merge must preserve reorder and cap at 4 known modules.");
         }
 
+        // 7c. SettingsSession.Initialized & early-edit before ConnectAsync/GetAsync completes
+        {
+            var early = new SettingsSession();
+            Require(!early.Initialized, "Fresh SettingsSession must start with Initialized == false.");
+            long draftBefore = early.DraftVersion;
+            early.Draft.Height = 84;
+            early.MarkEdited();
+            var srvSaved = new BarSettings { Height = 60, ShowClock = false, Transparency = 0.5 };
+            bool keep = early.ApplyReconnectSnapshot(srvSaved, srvSaved.Clone(), "i1", 1, draftBefore);
+            Require(early.Initialized && keep && early.HasUnsavedChanges &&
+                    Math.Abs(early.Draft.Height - 84) < 1e-6 && !early.Draft.ShowClock &&
+                    Math.Abs(early.Draft.Transparency - 0.5) < 1e-6,
+                "Early edit before baseline load must merge with server baseline instead of being overwritten.");
+
+            var init = new SettingsSession();
+            Require(!init.Initialized, "Fresh SettingsSession before ApplyInitialState must have Initialized == false.");
+            bool dirty = init.ApplyInitialState(srvSaved, srvSaved.Clone(), "i1", 1);
+            Require(init.Initialized && !dirty && !init.HasUnsavedChanges,
+                "ApplyInitialState without pending edits must set Initialized == true and clean state.");
+        }
+
         // 8. ReleaseInstaller.ReadPreparedRecovering: corrupt ready.json, missing files, and escaping path auto-clean and return null
         string updCache = Path.Combine(sessionTemp, "upd-cache");
         string updState = Path.Combine(updCache, "ready.json");

@@ -274,6 +274,7 @@ bool StageManager::StepFlight(Canvas& c, Flight& f)
 void StageManager::PaintFlights(Canvas& c)
 {
     const bool drew = !flights_.empty();
+    bool ended = false;
     for (auto it = flights_.begin(); it != flights_.end();) {
         if (!StepFlight(c, *it)) {
             ++it;
@@ -290,8 +291,11 @@ void StageManager::PaintFlights(Canvas& c)
             SetTransitions(it->window, true);
         }
         it = flights_.erase(it);
+        ended = true;
         surface_.Invalidate(); // the card shows its picture now
     }
+    if (ended && flights_.empty() && shrinkAfterFlight_)
+        ScheduleOldLargeShrinks();
     if (!flights_.empty() || drew) {
         c.Continue();
     } else {

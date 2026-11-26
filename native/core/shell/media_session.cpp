@@ -181,29 +181,6 @@ bool ReadStreamBytes(IStream* stream, std::vector<uint8_t>& bytes)
     return SUCCEEDED(hr) && !bytes.empty();
 }
 
-bool DecodeWicSquare(IWICImagingFactory* wic, std::vector<uint8_t>& bytes, IconImage& out)
-{
-    if (!wic || bytes.empty())
-        return false;
-    winrt::com_ptr<IWICStream> wicStream;
-    winrt::com_ptr<IWICBitmapDecoder> decoder;
-    winrt::com_ptr<IWICBitmapFrameDecode> frame;
-    winrt::com_ptr<IWICFormatConverter> converter;
-    if (FAILED(wic->CreateStream(wicStream.put())) || !wicStream || FAILED(wicStream->InitializeFromMemory(bytes.data(), static_cast<DWORD>(bytes.size()))) ||
-        FAILED(wic->CreateDecoderFromStream(wicStream.get(), nullptr, WICDecodeMetadataCacheOnDemand, decoder.put())) || !decoder ||
-        FAILED(decoder->GetFrame(0, frame.put())) || !frame || FAILED(wic->CreateFormatConverter(converter.put())) || !converter ||
-        FAILED(converter->Initialize(frame.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)))
-        return false;
-    UINT w = 0, h = 0;
-    if (FAILED(converter->GetSize(&w, &h)) || w == 0 || h == 0 || w > 8192 || h > 8192)
-        return false;
-    std::vector<uint8_t> px(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
-    if (FAILED(converter->CopyPixels(nullptr, w * 4, static_cast<UINT>(px.size()), px.data())))
-        return false;
-    out = CropToSquare(IconImage::FromBgra(static_cast<int>(w), static_cast<int>(h), std::move(px)), kArtworkSizePx);
-    return !out.Empty();
-}
-
 bool SnapshotChanged(const MediaSnapshot& a, const MediaSnapshot& b)
 {
     return TimelineChanged(a.timeline, b.timeline) || a.active != b.active || a.sessionId != b.sessionId || a.appId != b.appId || a.appName != b.appName ||
@@ -226,6 +203,8 @@ struct TrackedSession {
     std::wstring id, appId, title, artist, album;
     EventRegistrationToken playbackToken{}, mediaToken{}, timelineToken{};
     std::atomic<bool> mediaDirty{true}, timelineDirty{false};
+    int mediaFailCount = 0;
+    double mediaRetryAfterMs = 0.0;
     double lastPlayingMs = 0.0;
     std::shared_ptr<const IconImage> artwork;
     uint64_t artworkHash = 0;
@@ -453,14 +432,22 @@ private:
         return true;
     }
 
-    void ReadMediaProperties(TrackedSession& ts)
+    void ReadMediaProperties(TrackedSession& ts, double nowMs)
     {
         winrt::com_ptr<MediaPropsOp> op;
         winrt::com_ptr<Wmc::IGlobalSystemMediaTransportControlsSessionMediaProperties> props;
         if (FAILED(ts.session->TryGetMediaPropertiesAsync(op.put())) || !op || !AwaitAsync<MediaPropsHandler>(op.get(), stopEvent_.handle, kAsyncTimeoutMs) ||
-            stop_.load(std::memory_order_acquire) || FAILED(op->GetResults(props.put())) || !props)
+            stop_.load(std::memory_order_acquire) || FAILED(op->GetResults(props.put())) || !props) {
+            if (!stop_.load(std::memory_order_acquire) && ts.mediaFailCount < 3) {
+                ++ts.mediaFailCount;
+                ts.mediaRetryAfterMs = nowMs + 2000.0;
+            } else {
+                ts.mediaRetryAfterMs = 0.0;
+            }
             return;
-        ts.mediaDirty.store(false, std::memory_order_release);
+        }
+        ts.mediaFailCount = 0;
+        ts.mediaRetryAfterMs = 0.0;
 
         auto readStr = [&](HRESULT (STDMETHODCALLTYPE Wmc::IGlobalSystemMediaTransportControlsSessionMediaProperties::*fn)(HSTRING*)) {
             HSTRING hs = nullptr;
@@ -506,7 +493,7 @@ private:
         if (!wic_)
             CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(wic_.put()));
         IconImage img;
-        if (DecodeWicSquare(wic_.get(), bytes, img)) {
+        if (DecodeWicSquareImage(wic_.get(), bytes, kArtworkSizePx, img)) {
             ts.artwork = std::make_shared<const IconImage>(std::move(img));
             ts.artworkHash = hash;
             ts.artworkBytes = bytes.size();
@@ -517,9 +504,15 @@ private:
 
     bool ReadSessionSnapshot(TrackedSession& ts, bool isSystemCurrent, MediaSnapshot& outSnap, MediaSessionSummary& outSummary)
     {
+        const double nowMs = ClockMs();
         const bool timelineUpdated = ts.timelineDirty.exchange(false, std::memory_order_acq_rel);
-        if (ts.mediaDirty.load(std::memory_order_acquire))
-            ReadMediaProperties(ts);
+        const bool dirty = ts.mediaDirty.exchange(false, std::memory_order_acq_rel);
+        if (dirty) {
+            ts.mediaFailCount = 0;
+            ts.mediaRetryAfterMs = 0.0;
+        }
+        if (dirty || (ts.mediaRetryAfterMs > 0.0 && nowMs >= ts.mediaRetryAfterMs))
+            ReadMediaProperties(ts, nowMs);
 
         outSnap.sessionId = ts.id;
         outSnap.appId = ts.appId;
@@ -555,7 +548,6 @@ private:
             }
         }
 
-        const double nowMs = ClockMs();
         const bool playing = outSnap.state == MediaPlaybackState::Playing;
         if (playing)
             ts.lastPlayingMs = nowMs;

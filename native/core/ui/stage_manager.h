@@ -91,6 +91,8 @@ public:
     void Update(const std::vector<TaskItem>& items);
     // Everything put away comes back (on exit).
     void RestoreAll();
+    void SignalSnapshotStop() { snapshots_.SignalStop(); }
+    bool WaitSnapshotStop(DWORD timeoutMs) const { return snapshots_.WaitStop(timeoutMs); }
 
 private:
     struct Parked {
@@ -337,6 +339,7 @@ private:
     std::unordered_map<HWND, Parked> parked_;
     std::unordered_map<HWND, Picture> pictures_;
     std::unordered_map<std::wstring, Placeholder> placeholders_; // by app
+    bool shrinkAfterFlight_ = false;
     unsigned pictureGen_ = 0;
     uint64_t seq_ = 0;
     Set pending_;                      // picked in the strip, not in front yet

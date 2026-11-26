@@ -88,6 +88,9 @@ void StageManager::RestoreAll()
     actions_.clear();
     lk.unlock();
     ReleaseUp();
+    items_.clear();
+    excludedWindows_.clear();
+    shrinkAfterFlight_ = false;
     // Pictures on their way back: their windows come up now.
     for (Flight& f : flights_)
         if (!f.toStrip && !f.restored && IsWindow(f.window)) {
@@ -147,6 +150,8 @@ void StageManager::ApplyShrinkResult(const WindowSnapshots::Result& r)
     auto it = pictures_.find(r.window);
     if (it == pictures_.end())
         return;
+    if (it->second.gen == r.shrinkGen && r.large.ok && Flying(r.window))
+        shrinkAfterFlight_ = true;
     if (it->second.gen == r.shrinkGen && r.large.ok && !Flying(r.window)) {
         it->second.large = std::make_shared<const WindowPicture>(r.large);
         it->second.shrinkingGen = 0;
@@ -158,6 +163,7 @@ void StageManager::ApplyShrinkResult(const WindowSnapshots::Result& r)
 
 void StageManager::ScheduleOldLargeShrinks()
 {
+    shrinkAfterFlight_ = false;
     std::vector<std::pair<ULONGLONG, HWND>> full;
     for (const auto& [h, q] : pictures_)
         if (q.large && std::max(q.large->width, q.large->height) > kLargeOld)
@@ -165,10 +171,14 @@ void StageManager::ScheduleOldLargeShrinks()
     std::ranges::sort(full, std::greater<>());
     for (size_t i = kLargeKept; i < full.size(); ++i) {
         Picture& q = pictures_[full[i].second];
-        if (q.large && q.shrinkingGen != q.gen && !Flying(full[i].second)) {
-            q.shrinkingGen = q.gen;
-            snapshots_.RequestShrink(full[i].second, q.gen, q.large, kLargeOld);
+        if (!q.large || q.shrinkingGen == q.gen)
+            continue;
+        if (Flying(full[i].second)) {
+            shrinkAfterFlight_ = true;
+            continue;
         }
+        q.shrinkingGen = q.gen;
+        snapshots_.RequestShrink(full[i].second, q.gen, q.large, kLargeOld);
     }
 }
 

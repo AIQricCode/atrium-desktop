@@ -369,12 +369,18 @@ void StageManager::ProcessOpenIntent()
 
 void StageManager::Update(const std::vector<TaskItem>& items)
 {
+    if (!enabled_)
+        return;
     HWND fg = GetForegroundWindow();
     HWND root = fg ? GetAncestor(fg, GA_ROOTOWNER) : nullptr;
     // Window by window: each its own item, as each has its own card. Excluded apps never
     // enter the stage model at all.
     items_.clear();
     excludedWindows_.clear();
+    size_t totalWindows = 0;
+    for (const TaskItem& t : items)
+        totalWindows += t.windows.size();
+    items_.reserve(totalWindows);
     for (const TaskItem& t : items) {
         // Games too: their windows stay on the screen, whatever opens.
         if (StageAppExcluded(excluded_, t.key) || std::ranges::any_of(t.windows, IsGameWindow)) {
@@ -383,19 +389,17 @@ void StageManager::Update(const std::vector<TaskItem>& items)
             continue;
         }
         const bool rootHere = std::ranges::find(t.windows, root) != t.windows.end();
+        const TaskItem base{L"", t.name, t.pinned, t.pinIndex, {}, false, t.attention, t.badge, t.iconVersion, false};
         for (HWND h : t.windows) {
-            TaskItem w = t;
+            TaskItem w = base;
             w.key = WindowKey(t.key, h);
-            w.windows = {h};
-            w.multipleWindows = false;
+            w.windows.push_back(h);
             // In front: the window itself, or the app's most recent one when what is in front is not one of them.
             w.active = t.active && (rootHere ? h == root : h == t.windows.front());
             items_.push_back(std::move(w));
         }
     }
     coveredAt_ = 0; // windows moved: look again
-    if (!enabled_)
-        return;
     Prune();
     ProcessOpenIntent();
     AdoptMinimized();
@@ -1378,10 +1382,7 @@ void StageManager::Hide()
     if (!shown_)
         return;
     const double now = ClockMs();
-    revealFrom_ = Reveal(0, now);
-    revealStart_ = now;
-    shown_ = false;
-    inside_ = false;
+    revealFrom_ = Reveal(0, now), revealStart_ = now, shown_ = false, inside_ = false;
     hover_ = pressed_ = dragHover_ = closeHot_ = closePressed_ = -1;
     surface_.Invalidate(); // the cards slide back into the edge; then the window goes
 }
@@ -1469,11 +1470,8 @@ bool StageManager::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
         if (!shown_ || EntryAt(content) < 0)
             return false;
         pressed_ = -1;
-        if (scroll_.Wheel(GET_WHEEL_DELTA_WPARAM(w), m == WM_MOUSEHWHEEL, scrollCount_, size_t(Capacity()))) {
-            // An explicit scroll changes the anchor; model-only rebuilds keep it.
-            hover_ = -1;
-            Rebuild(false);
-        }
+        if (scroll_.Wheel(GET_WHEEL_DELTA_WPARAM(w), m == WM_MOUSEHWHEEL, scrollCount_, size_t(Capacity())))
+            hover_ = -1, Rebuild(false); // an explicit scroll changes the anchor; model-only rebuilds keep it
         surface_.Invalidate();
         return true;
     }
@@ -1494,8 +1492,7 @@ bool StageManager::Message(UINT m, WPARAM w, LPARAM l, LRESULT& result)
         return true;
     }
     case WM_MOUSELEAVE:
-        tracking_ = false;
-        inside_ = false;
+        tracking_ = false, inside_ = false;
         hover_ = pressed_ = closeHot_ = closePressed_ = -1;
         surface_.Invalidate();
         return true;

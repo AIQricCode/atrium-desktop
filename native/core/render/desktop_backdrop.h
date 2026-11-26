@@ -152,6 +152,7 @@ public:
     ID3D11Texture2D* Acquire() override;
     void Release() override {}
     ID3D11Texture2D* Again() override { return version_ ? texture_.get() : nullptr; }
+    bool CanReplay() const override { return true; }
     bool KeepsOwnWindowsOut() const override { return true; }
 
 private:

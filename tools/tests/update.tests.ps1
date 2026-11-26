@@ -1,4 +1,4 @@
-param([string]$CandidateZipPath = '')
+﻿param([string]$CandidateZipPath = '')
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'package-ownership.fixtures.ps1')
 $project = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -262,7 +262,11 @@ static class Stub {
         if ($backupDirs.Count -ne 1 -or
             !(Test-Path -LiteralPath (Join-Path $backupDirs[0].FullName 'extra.dll'))) { throw 'Case 3: expected extra.dll in backup' }
         if ($res.error -notmatch [regex]::Escape($backupDirs[0].FullName)) { throw "Case 3: error should mention backup path, got: $($res.error)" }
-        Assert-V1Restarted $c
+        $logAfter = Get-Content -LiteralPath $c.Log -Raw
+        $v1CoreStarts = ([regex]::Matches($logAfter, 'v1:Atrium\.exe:start')).Count
+        if ($v1CoreStarts -ne 1 -or $logAfter -match 'v1:Atrium\.Settings\.exe:start') {
+            throw "Case 3: partial rollback must not restart v1 (starts=$v1CoreStarts)"
+        }
     } finally { Stop-CaseProcesses $c.Dir $tracked.ToArray() }
     # Case 4: Stage 1 backup failure on tracked file must not lose user files
     $c = New-CaseLayout 'case4-stage1-fail'; $tracked = New-Object System.Collections.ArrayList

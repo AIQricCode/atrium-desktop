@@ -1371,9 +1371,8 @@ void ShutdownApp(HANDLE mutex, std::thread& startupThread)
     if (g_app.chrome)
         g_app.chrome->RestoreForExit();
     g_app.stage->RestoreAll();
-    g_app.winKey.reset();
-    g_app.imeWatcher.reset();
-    g_app.status.reset();
+    g_app.stage->SignalSnapshotStop();
+    g_app.winKey.reset(), g_app.imeWatcher.reset(), g_app.status.reset();
     g_app.preview->Close();
     std::vector<Bar*> stopBars;
     ForBars([&](Bar& bar) { stopBars.push_back(&bar); });
@@ -1388,24 +1387,21 @@ void ShutdownApp(HANDLE mutex, std::thread& startupThread)
         ShutdownLog();
         TerminateProcess(GetCurrentProcess(), 0);
     }
-    g_app.server.reset();
-    g_app.updates.reset();
-    g_app.listener.reset();
-    g_app.wechat.reset();
-    g_app.feishu.reset();
-    g_app.usb.reset();
-    g_app.notes.reset();
-    g_app.widgets.reset();
-    g_app.calendar.reset();
-    g_app.control.reset();
-    g_app.trayPanel.reset();
-    g_app.tray.reset();
-    g_app.start.reset();
+    g_app.server.reset(), g_app.updates.reset(), g_app.listener.reset();
+    g_app.wechat.reset(), g_app.feishu.reset(), g_app.usb.reset();
+    g_app.notes.reset(), g_app.widgets.reset(), g_app.calendar.reset(), g_app.control.reset();
+    g_app.trayPanel.reset(), g_app.tray.reset(), g_app.start.reset();
     g_app.menu.reset(), g_app.preview.reset();
     TaskModel::SetWindowSteps({}, {});
     g_app.genie.reset();
-    g_app.stage.reset();
-    g_app.ime.reset();
+    if (g_app.stage && !g_app.stage->WaitSnapshotStop(400)) {
+        g_app.chrome.reset();
+        Log(L"core: exited (snapshot worker stuck)");
+        ReleaseMutex(mutex);
+        ShutdownLog();
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
+    g_app.stage.reset(), g_app.ime.reset();
     Surface::SetGlassHost(nullptr);
     g_app.extras.reset(), g_app.catalog.reset();
     g_app.tasks.reset();

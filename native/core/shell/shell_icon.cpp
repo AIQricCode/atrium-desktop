@@ -6,6 +6,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <wincodec.h>
 #include <winrt/base.h>
 
 #include <algorithm>
@@ -235,6 +236,53 @@ IconImage CropToSquare(const IconImage& src, int size)
     const int sy0 = (src.height - side) / 2;
     ResampleRect(src, sx0, sy0, side, side, out, size, 0, 0, size, size);
     return IconImage::FromBgra(size, size, std::move(out));
+}
+
+bool DecodeWicSquareImage(IWICImagingFactory* wic, std::vector<uint8_t>& bytes, int targetSize, IconImage& out)
+{
+    constexpr size_t kMaxBytes = 16u * 1024u * 1024u;
+    if (!wic || bytes.empty() || bytes.size() > kMaxBytes || targetSize <= 0)
+        return false;
+    winrt::com_ptr<IWICStream> wicStream;
+    winrt::com_ptr<IWICBitmapDecoder> decoder;
+    winrt::com_ptr<IWICBitmapFrameDecode> frame;
+    if (FAILED(wic->CreateStream(wicStream.put())) || !wicStream || FAILED(wicStream->InitializeFromMemory(bytes.data(), static_cast<DWORD>(bytes.size()))) ||
+        FAILED(wic->CreateDecoderFromStream(wicStream.get(), nullptr, WICDecodeMetadataCacheOnDemand, decoder.put())) || !decoder ||
+        FAILED(decoder->GetFrame(0, frame.put())) || !frame)
+        return false;
+    UINT w = 0, h = 0;
+    if (FAILED(frame->GetSize(&w, &h)) || w == 0 || h == 0 || w > 8192 || h > 8192)
+        return false;
+
+    // Pull pipeline: convert to 32bppPBGRA first (handles sub-byte indexed pixel formats and premultiplies before
+    // filtering), then clip to a centred square, then scale directly to targetSize without decoding the full image.
+    winrt::com_ptr<IWICFormatConverter> converter;
+    if (FAILED(wic->CreateFormatConverter(converter.put())) || !converter ||
+        FAILED(converter->Initialize(frame.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)))
+        return false;
+    winrt::com_ptr<IWICBitmapSource> source = converter.as<IWICBitmapSource>();
+    const UINT side = std::min(w, h);
+    if (w != h) {
+        winrt::com_ptr<IWICBitmapClipper> clipper;
+        const WICRect rect{static_cast<INT>((w - side) / 2), static_cast<INT>((h - side) / 2), static_cast<INT>(side), static_cast<INT>(side)};
+        if (FAILED(wic->CreateBitmapClipper(clipper.put())) || !clipper || FAILED(clipper->Initialize(source.get(), &rect)))
+            return false;
+        source = clipper.as<IWICBitmapSource>();
+    }
+    if (side != static_cast<UINT>(targetSize)) {
+        winrt::com_ptr<IWICBitmapScaler> scaler;
+        const auto mode = side > static_cast<UINT>(targetSize) ? WICBitmapInterpolationModeFant : WICBitmapInterpolationModeLinear;
+        if (FAILED(wic->CreateBitmapScaler(scaler.put())) || !scaler ||
+            FAILED(scaler->Initialize(source.get(), static_cast<UINT>(targetSize), static_cast<UINT>(targetSize), mode)))
+            return false;
+        source = scaler.as<IWICBitmapSource>();
+    }
+    const UINT stride = static_cast<UINT>(targetSize) * 4;
+    std::vector<uint8_t> px(static_cast<size_t>(stride) * static_cast<size_t>(targetSize));
+    if (FAILED(source->CopyPixels(nullptr, stride, static_cast<UINT>(px.size()), px.data())))
+        return false;
+    out = IconImage::FromBgra(targetSize, targetSize, std::move(px));
+    return !out.Empty();
 }
 
 std::wstring AppExecutable(const std::wstring& path)

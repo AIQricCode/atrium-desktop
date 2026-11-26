@@ -35,6 +35,7 @@ public:
     // A source that sends a frame only when its picture changes (the wallpaper): its last frame
     // again, for a glass that missed it or lost its copy; null for sources that keep sending.
     virtual ID3D11Texture2D* Again() { return nullptr; }
+    virtual bool CanReplay() const { return false; }
     // Whether Atrium's windows may show in other captures while this one runs.
     virtual bool KeepsOwnWindowsOut() const = 0;
     virtual void SetPaused(bool) {}

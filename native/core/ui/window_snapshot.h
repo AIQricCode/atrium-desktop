@@ -57,6 +57,8 @@ public:
     void Request(HWND window, int maxWidth, int maxHeight, float radius, int largeMax = 0, bool urgent = false);
     // Downsamples an existing `large` snapshot on the worker thread, announcing completion with `shrinkGen == gen`.
     void RequestShrink(HWND window, unsigned gen, std::shared_ptr<const WindowPicture> large, int largeMax);
+    void SignalStop();
+    bool WaitStop(DWORD timeoutMs) const;
     struct Result {
         HWND window;
         WindowPicture picture;
@@ -89,6 +91,7 @@ private:
     UINT message_ = 0;
     bool stop_ = false;
     HANDLE stopEvent_ = nullptr;
+    HANDLE doneEvent_ = nullptr;
     std::thread worker_;
 };
 
